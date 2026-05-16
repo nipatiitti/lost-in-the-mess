@@ -27,7 +27,6 @@
   let frameCount = 0;
 
   const CAPTURE_WIDTH = 320;
-  const CAPTURE_HEIGHT = 320;
   const STREAM_FPS = 3;
 
   function handleFileSelect(e) {
@@ -101,9 +100,12 @@
     if (!videoEl || !canvasEl || !videoStream) return;
 
     const ctx = canvasEl.getContext("2d");
+    const vw = videoEl.videoWidth || CAPTURE_WIDTH;
+    const vh = videoEl.videoHeight || CAPTURE_WIDTH;
+    const captureH = Math.round(vh * (CAPTURE_WIDTH / vw));
     canvasEl.width = CAPTURE_WIDTH;
-    canvasEl.height = CAPTURE_HEIGHT;
-    ctx.drawImage(videoEl, 0, 0, CAPTURE_WIDTH, CAPTURE_HEIGHT);
+    canvasEl.height = captureH;
+    ctx.drawImage(videoEl, 0, 0, CAPTURE_WIDTH, captureH);
 
     // Get JPEG as data URI, then extract the base64 part
     const dataUri = canvasEl.toDataURL("image/jpeg", 0.6);
@@ -115,7 +117,7 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           width: CAPTURE_WIDTH,
-          height: CAPTURE_HEIGHT,
+          height: captureH,
           data: b64,
         }),
       });
@@ -370,7 +372,7 @@
                 background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);
                 font-family:var(--font-mono);font-size:10px;letter-spacing:0.12em;color:var(--bone-200);
               "
-                >PREVIEW · {CAPTURE_WIDTH}×{CAPTURE_HEIGHT} @ {STREAM_FPS}FPS</span
+                >PREVIEW · {CAPTURE_WIDTH}px @ {STREAM_FPS}FPS</span
               >
             </div>
           {/if}

@@ -44,7 +44,7 @@
           <!-- svelte-ignore a11y-missing-attribute -->
           <img 
             src="/api/video/stream/{streamId}" 
-            style="width: 100%; display: block; aspect-ratio: 4/3; object-fit: contain; background: #111;" 
+            style="width: 100%; display: block; object-fit: contain; background: #111;"
             on:error={(e) => { e.target.style.display = 'none'; e.target.nextElementSibling.style.display = 'flex'; }}
             on:load={(e) => { e.target.style.display = 'block'; e.target.nextElementSibling.style.display = 'none'; }}
           />
