@@ -56,7 +56,7 @@ pub mod platform {
                 .expect("Failed to create capture stream");
 
             loop {
-                if !super::VIDEO_RUNNING.load(std::sync::atomic::Ordering::Relaxed) {
+                if !super::VIDEO_RUNNING.load(std::sync::atomic::Ordering::SeqCst) {
                     info!("Video streaming stopped.");
                     break;
                 }
@@ -75,6 +75,11 @@ pub mod platform {
 
                 std::thread::sleep(Duration::from_millis(100)); // ~10 fps cap
             }
+
+            // Explicitly drop stream to issue VIDIOC_STREAMOFF
+            drop(stream);
+            drop(dev);
+            info!("Camera device {} closed properly.", device_path);
         });
     }
 

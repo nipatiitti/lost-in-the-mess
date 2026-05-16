@@ -263,12 +263,12 @@ async fn main() {
                             .trim()
                             .to_string();
                         info!("Node {} starting video stream from {}", id, device);
-                        litm_app::video::VIDEO_RUNNING.store(true, std::sync::atomic::Ordering::Relaxed);
+                        litm_app::video::VIDEO_RUNNING.store(true, std::sync::atomic::Ordering::SeqCst);
                         let streamer = litm_app::video::make_streamer(&node);
                         litm_app::video::stream_video(streamer, device);
                     } else if cmd_str.starts_with("stop-video") {
                         info!("Node {} stopping video stream", id);
-                        litm_app::video::VIDEO_RUNNING.store(false, std::sync::atomic::Ordering::Relaxed);
+                        litm_app::video::VIDEO_RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
                     } else if cmd_str.starts_with("view-video") {
                         info!("Node {} starting video viewer for a client", id);
                         let receiver = litm_app::video::make_receiver(&node);
