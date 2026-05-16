@@ -4,10 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+app_sdk     = { path = "../app_sdk" }
 litm-common = { path = "../common" }
-litm-transport = { path = "../transport" }
-litm-delivery = { path = "../delivery" }
-litm-mesh = { path = "../mesh" }
 
 axum = { version = "0.7", features = ["macros"] }
 tokio = { version = "1.0", features = ["full"] }
@@ -15,6 +13,5 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tower-http = { version = "0.5", features = ["cors"] }
 clap = { version = "4.0", features = ["derive"] }
-rand = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

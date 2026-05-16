@@ -1,0 +1,17 @@
+[package]
+name = "app_sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+litm-common    = { workspace = true }
+litm-transport = { workspace = true }
+litm-delivery  = { workspace = true }
+litm-mesh      = { workspace = true }
+postcard       = { version = "1", features = ["alloc"] }
+serde          = { version = "1", features = ["derive"] }
+tokio          = { version = "1", features = ["sync", "rt", "time", "macros"] }
+rand           = "0.8"
+tracing        = "0.1"
+thiserror      = "1"
