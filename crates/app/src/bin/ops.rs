@@ -258,6 +258,22 @@ async fn main() {
                 delivery.clone(),
             );
 
+            // LOGGING: Listen for received objects and print them
+            let mut delivery_rx = delivery.subscribe();
+            tokio::spawn(async move {
+                while let Some(obj) = delivery_rx.recv().await {
+                    let content_preview = if let Ok(text) = String::from_utf8(obj.payload.clone()) {
+                        format!("\"{}\"", text)
+                    } else {
+                        format!("{} bytes (binary)", obj.payload.len())
+                    };
+                    info!(
+                        "Node {} RECEIVED object {} from Node {}: {}",
+                        id, obj.id, obj.source, content_preview
+                    );
+                }
+            });
+
             // Command socket for send-image
             let listener = {
                 let socket = socket2::Socket::new(
