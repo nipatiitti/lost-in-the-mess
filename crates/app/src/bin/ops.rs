@@ -46,11 +46,21 @@ enum Commands {
         #[arg(short, long)]
         message: String,
     },
+    StreamVideo {
+        #[arg(short, long)]
+        id: NodeId,
+        #[arg(short = 'd', long, default_value = "/dev/video0")]
+        device: String,
+    },
+    ViewVideo {
+        #[arg(short, long)]
+        id: NodeId,
+    },
 }
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt().with_writer(std::io::stderr).init();
     let cli = Cli::parse();
 
     match cli.command {
@@ -254,6 +264,21 @@ async fn main() {
                             text.into_bytes(),
                             SendPolicy::default(),
                         );
+                    } else if cmd_str.starts_with("stream-video") {
+                        let device = cmd_str
+                            .strip_prefix("stream-video ")
+                            .unwrap_or("/dev/video0")
+                            .trim()
+                            .to_string();
+                        info!("Node {} starting video stream from {}", id, device);
+                        litm_app::video::stream_video(delivery.clone(), device);
+                    } else if cmd_str.starts_with("view-video") {
+                        info!("Node {} starting video viewer for a client", id);
+                        let delivery_clone = delivery.clone();
+                        tokio::spawn(async move {
+                            litm_app::video::view_video_tcp(delivery_clone, stream).await;
+                        });
+                        continue;
                     }
                 }
             }
@@ -276,6 +301,30 @@ async fn main() {
                     .write_all(format!("send-text {}", message).as_bytes())
                     .await;
                 info!("Triggered send-text on node {}", id);
+            } else {
+                warn!("Failed to connect to node {}", id);
+            }
+        }
+
+        Commands::StreamVideo { id, device } => {
+            if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{}", 10000 + id)).await {
+                let _ = stream
+                    .write_all(format!("stream-video {}", device).as_bytes())
+                    .await;
+                info!("Triggered stream-video on node {} from {}", id, device);
+            } else {
+                warn!("Failed to connect to node {}", id);
+            }
+        }
+
+        Commands::ViewVideo { id } => {
+            if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{}", 10000 + id)).await {
+                let _ = stream.write_all(b"view-video\n").await;
+                info!("Connected to node {}. Piping video to stdout...", id);
+                let mut stdout = tokio::io::stdout();
+                if let Err(e) = tokio::io::copy(&mut stream, &mut stdout).await {
+                    warn!("Stream ended: {}", e);
+                }
             } else {
                 warn!("Failed to connect to node {}", id);
             }
