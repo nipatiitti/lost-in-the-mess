@@ -26,8 +26,14 @@ impl Default for RadioConfig {
         Self {
             iface: "wlan0".into(),
             stream_id: 0xA11CE,
-            mcs_index: 1,
-            bandwidth: 40,
+            // MCS 0 = BPSK ½: lowest rate, best receiver sensitivity (~3-5 dB over MCS 1).
+            // Sufficient for our beacon + FEC symbol sizes; we are bandwidth-limited by
+            // radio budget, not throughput.
+            mcs_index: 0,
+            // 20 MHz: 3 dB better noise floor vs 40 MHz. Use with 2.4 GHz channel 1/6/11
+            // (HT20) for maximum range. Switch interface with:
+            //   iw dev <iface> set channel 6 HT20
+            bandwidth: 20,
             // 16 was too small: FEC bursts overflow the ring before the 200ms-poll RX thread drains it.
             ring_size: 128,
         }

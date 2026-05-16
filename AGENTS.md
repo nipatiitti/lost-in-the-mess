@@ -36,6 +36,24 @@ Our concrete targets:
   conditions.
 - Development is on Linux only; no cross-platform support.
 
+### Recommended radio settings for maximum range
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Band | 2.4 GHz | ~8 dB less free-space path loss vs 5 GHz (Friis); better wall penetration |
+| Channel | 6 (HT20) | Non-overlapping; 20 MHz width gives 3 dB better noise floor than HT40 |
+| MCS index | 0 (BPSK ½) | Best receiver sensitivity; ~3–5 dB over MCS 1; sufficient for our frame sizes |
+| TX power | 23 dBm | Hardware/regulatory max; verify local limits |
+
+Setup commands:
+```bash
+sudo iw dev <iface> set channel 6 HT20
+sudo iw dev <iface> set txpower fixed 2300   # mBm = 23 dBm
+```
+
+5 GHz / 40 MHz / MCS ≥ 1 loses ~16–20 dB of link budget vs the above — roughly
+6–10× less range at equivalent packet loss.
+
 ## Project layout
 
 Cargo workspace, edition 2024, GPL-3.0:
