@@ -2,6 +2,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use app_sdk::{VideoChannel, VideoQuality, VideoStreamer};
+use image::ImageEncoder;
+use image::codecs::jpeg::JpegEncoder;
 use nokhwa::{
     Camera,
     pixel_format::RgbFormat,
@@ -64,10 +66,18 @@ pub fn run_capture(
                 Err(_) => continue,
             };
 
-            let rgb = frame.buffer().to_vec();
+            let decoded = match frame.decode_image::<RgbFormat>() {
+                Ok(img) => img,
+                Err(_) => continue,
+            };
+            let rgb = decoded.as_raw();
 
             // Local preview — always send for UI feedback regardless of rate limit
-            let _ = preview_tx.try_send(rgb.clone());
+            let mut jpeg_buf = Vec::new();
+            let enc = JpegEncoder::new_with_quality(&mut jpeg_buf, 50);
+            if enc.write_image(rgb, cap_w, cap_h, image::ExtendedColorType::Rgb8).is_ok() {
+                let _ = preview_tx.try_send(jpeg_buf);
+            }
 
             // Rate-limit the radio stream
             let now = Instant::now();
@@ -76,7 +86,7 @@ pub fn run_capture(
             }
             last_sent = now;
 
-            let _ = streamer.send_frame(&rgb, cap_w, cap_h);
+            let _ = streamer.send_frame(rgb, cap_w, cap_h);
         }
 
         let _ = camera.stop_stream();
