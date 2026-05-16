@@ -46,20 +46,21 @@ pub struct VideoFrameData {
 /// and stale frames (sequence number wrap-aware).
 pub struct VideoReceiver {
     inner: MessageReceiver,
-    last_seq: Option<u32>,
+    last_seqs: std::collections::HashMap<litm_common::NodeId, u32>,
 }
 
 impl VideoReceiver {
     pub fn new(node: &Node) -> Self {
-        Self { inner: node.subscribe(), last_seq: None }
+        Self { inner: node.subscribe(), last_seqs: std::collections::HashMap::new() }
     }
 
     pub async fn recv_frame(&mut self) -> Result<VideoFrameData> {
         loop {
             let msg = self.inner.recv().await?;
             if let MessagePayload::VideoFrame { seq, width, height, codec, data } = msg.payload {
-                if is_newer_seq(self.last_seq, seq) {
-                    self.last_seq = Some(seq);
+                let last = self.last_seqs.get(&msg.source).copied();
+                if is_newer_seq(last, seq) {
+                    self.last_seqs.insert(msg.source, seq);
                     return Ok(VideoFrameData { seq, width, height, codec, data, source: msg.source });
                 }
             }
@@ -69,13 +70,14 @@ impl VideoReceiver {
 }
 
 /// Wrap-aware seq comparison. Returns true if `seq` is strictly newer than `last`.
-/// "Newer" means wrapping_sub in [1, 10_000).
+/// Also returns true if `seq` is vastly different (stream restart).
+/// We only reject frames that are slightly old (diff is between u32::MAX - 10000 and u32::MAX).
 fn is_newer_seq(last: Option<u32>, seq: u32) -> bool {
     match last {
         None => true,
         Some(last) => {
             let diff = seq.wrapping_sub(last);
-            diff > 0 && diff < 10_000
+            diff != 0 && !(diff > (u32::MAX - 10_000))
         }
     }
 }
@@ -106,9 +108,9 @@ mod tests {
     }
 
     #[test]
-    fn out_of_window_rejected() {
-        assert!(!is_newer_seq(Some(5), 10005)); // diff = 10000, not < 10000
-        assert!(!is_newer_seq(Some(5), 20000));
+    fn out_of_window_accepted_as_restart() {
+        assert!(is_newer_seq(Some(5), 10005)); // diff = 10000, accepted as restart
+        assert!(is_newer_seq(Some(5), 20000));
     }
 
     #[test]

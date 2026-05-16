@@ -1,3 +1,7 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
+pub static VIDEO_RUNNING: AtomicBool = AtomicBool::new(false);
+
 #[cfg(target_os = "linux")]
 pub mod platform {
     use std::time::Duration;
@@ -50,6 +54,10 @@ pub mod platform {
                 .expect("Failed to create capture stream");
 
             loop {
+                if !super::VIDEO_RUNNING.load(std::sync::atomic::Ordering::Relaxed) {
+                    info!("Video streaming stopped.");
+                    break;
+                }
                 let (buf, _meta) = match stream.next() {
                     Ok(res) => res,
                     Err(e) => {
@@ -59,7 +67,7 @@ pub mod platform {
                     }
                 };
 
-                if let Err(e) = streamer.send_frame(640, 480, buf.to_vec()) {
+                if let Err(e) = streamer.send_frame(format.width as u16, format.height as u16, buf.to_vec()) {
                     warn!("Failed to send video frame: {}", e);
                 }
 

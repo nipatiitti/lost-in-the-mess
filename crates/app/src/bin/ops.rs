@@ -50,6 +50,10 @@ enum Commands {
         #[arg(short = 'd', long, default_value = "/dev/video0")]
         device: String,
     },
+    StopVideo {
+        #[arg(short, long)]
+        id: NodeId,
+    },
     ViewVideo {
         #[arg(short, long)]
         id: NodeId,
@@ -259,8 +263,12 @@ async fn main() {
                             .trim()
                             .to_string();
                         info!("Node {} starting video stream from {}", id, device);
+                        litm_app::video::VIDEO_RUNNING.store(true, std::sync::atomic::Ordering::Relaxed);
                         let streamer = litm_app::video::make_streamer(&node);
                         litm_app::video::stream_video(streamer, device);
+                    } else if cmd_str.starts_with("stop-video") {
+                        info!("Node {} stopping video stream", id);
+                        litm_app::video::VIDEO_RUNNING.store(false, std::sync::atomic::Ordering::Relaxed);
                     } else if cmd_str.starts_with("view-video") {
                         info!("Node {} starting video viewer for a client", id);
                         let receiver = litm_app::video::make_receiver(&node);
@@ -301,6 +309,17 @@ async fn main() {
             {
                 let _ = stream.write_all(format!("stream-video {}", device).as_bytes()).await;
                 info!("Triggered stream-video on node {} from {}", id, device);
+            } else {
+                warn!("Failed to connect to node {}", id);
+            }
+        }
+
+        Commands::StopVideo { id } => {
+            if let Ok(mut stream) =
+                TcpStream::connect(format!("127.0.0.1:{}", 10000 + id)).await
+            {
+                let _ = stream.write_all(b"stop-video\n").await;
+                info!("Triggered stop-video on node {}", id);
             } else {
                 warn!("Failed to connect to node {}", id);
             }
