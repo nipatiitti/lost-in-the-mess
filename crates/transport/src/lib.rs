@@ -2,8 +2,11 @@
 
 mod crypto;
 mod frame;
+pub mod mock;
 mod radio;
 mod replay;
+
+pub use mock::MockTransport;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};

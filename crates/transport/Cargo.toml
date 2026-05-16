@@ -17,6 +17,7 @@ zeroize           = { version = "1", features = ["derive"] }
 wfb_rs            = { git = "https://github.com/kova-labs/kova-wfb-rs" }
 
 # Plumbing
-tokio             = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time", "macros"] }
+tokio             = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time", "macros", "net"] }
 crossbeam-channel = "0.5"
 tracing           = "0.1"
+socket2           = { version = "0.5", features = ["all"] }

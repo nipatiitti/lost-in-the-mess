@@ -105,10 +105,11 @@ pub struct DeliveredObject {
     pub payload: Vec<u8>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NeighborInfo {
     pub id: NodeId,
     pub prr: f32, // 0.0..=1.0, rolling estimate
+    #[serde(skip, default = "Instant::now")]
     pub last_seen: Instant,
     pub bitmap: ObjectBitmap,
 }

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/common", "crates/transport", "crates/delivery", "crates/mesh", "crates/app"]
+members = ["crates/common", "crates/transport", "crates/delivery", "crates/mesh", "crates/app", "crates/api"]
 
 
 [workspace.package]
