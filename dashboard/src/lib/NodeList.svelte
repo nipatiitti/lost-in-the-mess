@@ -23,8 +23,8 @@
         <div class="flex items-center space-x-3 w-full">
           <span class="font-bold w-1/4">ID_{node.id.toString().padStart(3, '0')}</span>
           <span class={`font-mono w-1/4 ${prrColor(node.prr)}`}>{(node.prr * 100).toFixed(1)}%</span>
-          <span class="w-1/4 opacity-70">METRIC_OK</span>
-          <span class="w-1/4 text-right opacity-50 tabular-nums">LIVE</span>
+          <span class="w-1/4 opacity-70">{node.rssi_dbm} dBm</span>
+          <span class="w-1/4 text-right opacity-50 tabular-nums">PRR {(node.prr * 100).toFixed(0)}%</span>
         </div>
       </div>
     {/each}

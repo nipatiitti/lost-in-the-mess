@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 96" fill="none">
+  
+  
+
+  
+  <path d="M6 22 L6 74" stroke="#6DF7B5" stroke-width="2"></path>
+  <path d="M6 22 L18 22" stroke="#6DF7B5" stroke-width="2"></path>
+  <path d="M6 74 L18 74" stroke="#6DF7B5" stroke-width="2"></path>
+
+  
+  <text x="34" y="60" class="word bone">LOST IN THE MES</text>
+  
+  <g transform="translate(330 38)">
+    <text x="0" y="22" class="word glyph-mono" font-size="22" fill="#6DF7B5">(h)</text>
+    <line x1="0" y1="-2" x2="46" y2="-2" stroke="#6DF7B5" stroke-width="1.5"></line>
+  </g>
+  <text x="378" y="60" class="word bone">S</text>
+
+  
+  <path d="M474 22 L474 74" stroke="#6DF7B5" stroke-width="2"></path>
+  <path d="M462 22 L474 22" stroke="#6DF7B5" stroke-width="2"></path>
+  <path d="M462 74 L474 74" stroke="#6DF7B5" stroke-width="2"></path>
+</svg>

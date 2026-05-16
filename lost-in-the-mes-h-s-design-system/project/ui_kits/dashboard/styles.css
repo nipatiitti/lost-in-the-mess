@@ -1,0 +1,217 @@
+/* Kit-scoped CSS — pulls tokens from the design system and adds
+   layout chrome for the dashboard shell. */
+@import url("../../colors_and_type.css");
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  margin: 0;
+  height: 100%;
+  background: var(--ink-050);
+  color: var(--bone-100);
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection { background: var(--signal-300); color: var(--ink-000); }
+
+button { font: inherit; }
+
+/* ---------- Layout shell ---------- */
+.shell {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  grid-template-rows: 48px 1fr;
+  height: 100vh;
+}
+.shell-side { grid-row: 1 / -1; border-right: 1px solid var(--border); background: var(--ink-100); display:flex; flex-direction:column; }
+.shell-top  { border-bottom: 1px solid var(--border); background: var(--ink-100); display:flex; align-items:center; padding: 0 var(--space-5); gap: var(--space-5); }
+.shell-main { overflow: hidden; position: relative; display:flex; flex-direction:column; }
+
+/* ---------- Decoration utilities ---------- */
+.bracketed { position: relative; }
+.bracketed::before, .bracketed::after,
+.bracketed > .br-tl, .bracketed > .br-br {
+  content: ""; position: absolute; width: 12px; height: 12px;
+  border: 1px solid var(--bone-100); opacity: 0.5;
+}
+.bracketed::before { top: 8px; left: 8px; border-right: none; border-bottom: none; }
+.bracketed::after  { bottom: 8px; right: 8px; border-left: none; border-top: none; }
+
+/* ---------- Atoms (also class-only versions used inside Primitives.jsx) ---------- */
+.stamp {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--bone-400);
+}
+.mono { font-family: var(--font-mono); }
+.ticker { font-family: var(--font-mono); font-feature-settings: "tnum" 1; }
+
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+}
+.panel-header {
+  height: 36px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 var(--space-4);
+}
+
+.btn {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding: 8px 14px;
+  border-radius: 2px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background var(--dur-fast) var(--ease-snap), transform var(--dur-fast) var(--ease-snap);
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.btn-primary { background: var(--signal-300); color: var(--ink-000); }
+.btn-primary:hover { background: var(--signal-100); }
+.btn-primary:active { transform: scale(0.99); background: var(--signal-500); }
+.btn-warm    { background: var(--uplink-300); color: var(--ink-000); }
+.btn-secondary { background: transparent; color: var(--bone-100); border-color: var(--border); }
+.btn-secondary:hover { background: var(--ink-300); }
+.btn-danger  { background: transparent; color: var(--lost-300); border-color: var(--lost-300); }
+.btn-ghost   { background: transparent; color: var(--signal-300); }
+.btn:disabled, .btn[aria-disabled="true"] {
+  color: var(--bone-400);
+  border-color: var(--border);
+  border-style: dashed;
+  cursor: not-allowed;
+}
+
+.icon-btn {
+  width: 30px; height: 30px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  color: var(--bone-100);
+  transition: background var(--dur-fast) var(--ease-snap);
+}
+.icon-btn:hover { background: var(--ink-300); }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  border: 1px solid var(--border);
+}
+.chip-dot { width: 6px; height: 6px; border-radius: 50%; }
+
+.chip-ok    { color: var(--signal-300); border-color: rgba(109,247,181,0.4); background: rgba(109,247,181,0.08); }
+.chip-ok    .chip-dot { background: var(--signal-300); box-shadow: 0 0 6px var(--signal-300); }
+.chip-warm  { color: var(--uplink-300); border-color: rgba(255,179,71,0.4); background: rgba(255,179,71,0.08); }
+.chip-warm  .chip-dot { background: var(--uplink-300); box-shadow: 0 0 6px var(--uplink-300); }
+.chip-warn  { color: var(--warn-300); border-color: rgba(232,213,92,0.4); background: rgba(232,213,92,0.08); }
+.chip-warn  .chip-dot { background: var(--warn-300); }
+.chip-lost  { color: var(--lost-300); border-color: rgba(255,74,139,0.4); background: rgba(255,74,139,0.08); }
+.chip-lost  .chip-dot { background: var(--lost-300); box-shadow: 0 0 6px var(--lost-300); }
+.chip-idle  { color: var(--bone-300); border-color: var(--border); background: transparent; }
+.chip-idle  .chip-dot { background: var(--bone-400); }
+.chip-info  { color: var(--drift-300); border-color: rgba(111,195,255,0.4); background: rgba(111,195,255,0.08); }
+.chip-info  .chip-dot { background: var(--drift-300); }
+
+.tag {
+  display: inline-flex; align-items: center;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  background: var(--ink-200);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  border-radius: 2px;
+}
+
+/* ---------- Sidebar nav ---------- */
+.nav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--bone-300);
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  transition: background var(--dur-fast) var(--ease-snap);
+}
+.nav-item:hover { background: var(--ink-200); color: var(--bone-100); }
+.nav-item.active {
+  background: var(--ink-200);
+  color: var(--bone-100);
+  border-left-color: var(--signal-300);
+}
+.nav-item .nav-count { margin-left: auto; color: var(--bone-400); font-size: 10px; }
+.nav-item.active .nav-count { color: var(--signal-300); }
+
+/* ---------- Tabs (within the main area) ---------- */
+.tabbar {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  background: var(--ink-050);
+  padding: 0 var(--space-5);
+  align-items: center;
+  height: 44px;
+}
+.tab {
+  position: relative;
+  padding: 0 var(--space-4);
+  height: 100%;
+  background: transparent;
+  color: var(--bone-300);
+  border: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.tab.active { color: var(--bone-100); }
+.tab.active::after {
+  content: ""; position: absolute; left: var(--space-4); right: var(--space-4); bottom: -1px;
+  height: 1px; background: var(--signal-300);
+  box-shadow: 0 0 8px var(--signal-300);
+}
+
+/* ---------- Scrollbar ---------- */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--ink-400); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--ink-500); }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------- Animation: live pulse on active node ---------- */
+@keyframes nodePulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+.node-live circle.halo { animation: nodePulse 2s var(--ease-in-out) infinite; }
+
+/* Tooltip */
+.tt {
+  position: absolute;
+  background: rgba(7,11,18,0.92);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border-strong);
+  padding: 8px 10px;
+  border-radius: 2px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  pointer-events: none;
+  z-index: 50;
+  white-space: nowrap;
+}
