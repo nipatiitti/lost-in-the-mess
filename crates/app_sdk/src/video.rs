@@ -168,7 +168,14 @@ impl VideoChannel {
 
     fn emit(&self, frame: VideoFrame) {
         let mut subs = self.subscribers.lock().unwrap();
-        subs.retain(|tx| tx.try_send(frame.clone()).is_ok());
+        subs.retain(|tx| match tx.try_send(frame.clone()) {
+            Ok(()) => true,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                // Subscriber is slow — drop this frame but keep the subscriber alive.
+                true
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => false,
+        });
     }
 }
 

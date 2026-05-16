@@ -267,7 +267,15 @@ async fn main() {
     let streams_clone = active_streams.clone();
 
     tokio::spawn(async move {
+        info!("Video stream receiver task started");
         while let Some(frame) = video_rx.recv().await {
+            info!(
+                source = frame.source,
+                frame_id = frame.frame_id,
+                chunks = %format!("{}/{}", frame.chunks_received, frame.chunks_total),
+                jpeg_len = frame.jpeg_bytes.len(),
+                "Received video frame from mesh"
+            );
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
             let mut map = streams_clone.lock().unwrap();
             
@@ -277,10 +285,12 @@ async fn main() {
             } else {
                 let (tx, _rx) = tokio::sync::watch::channel(frame.jpeg_bytes);
                 map.insert(frame.source, (now, tx));
+                info!(source = frame.source, "New active stream registered");
             }
             
             map.retain(|_, (ts, _)| now - *ts < 10);
         }
+        tracing::warn!("Video stream receiver task ended — channel closed");
     });
 
     let state = AppState { node, messages, video_ch, active_streams };
