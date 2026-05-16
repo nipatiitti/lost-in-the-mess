@@ -1,18 +1,21 @@
 use axum::{
     Router,
-    extract::{Json, State, Path, ws::{WebSocketUpgrade, WebSocket, Message}},
-    routing::{get, post},
-    response::IntoResponse,
     body::Body,
+    extract::{
+        Json, Path, State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
+    },
+    response::IntoResponse,
+    routing::{get, post},
 };
-use tokio_stream::wrappers::ReceiverStream;
+use base64::{Engine as _, prelude::BASE64_STANDARD};
 use clap::Parser;
 use litm_common::{NeighborInfo, NodeId};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
+use tokio_stream::wrappers::ReceiverStream;
 use tower_http::cors::CorsLayer;
 use tracing::info;
-use base64::{Engine as _, prelude::BASE64_STANDARD};
 
 use app_sdk::{MessagePayload, Node, NodeBuilder, VideoChannel};
 
@@ -31,7 +34,8 @@ struct AppState {
     node: Node,
     messages: Arc<Mutex<Vec<ApiMessage>>>,
     video_ch: Arc<VideoChannel>,
-    active_streams: Arc<Mutex<std::collections::HashMap<NodeId, (u64, tokio::sync::watch::Sender<Vec<u8>>)> >>,
+    active_streams:
+        Arc<Mutex<std::collections::HashMap<NodeId, (u64, tokio::sync::watch::Sender<Vec<u8>>)>>>,
 }
 
 #[derive(Serialize, Clone)]
@@ -67,7 +71,10 @@ struct SendVideoFrameRequest {
 }
 
 async fn get_data(State(state): State<AppState>) -> Json<GodData> {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     let mut active_streams = Vec::new();
     {
         let mut map = state.active_streams.lock().unwrap();
@@ -91,7 +98,7 @@ async fn send_message(
     Json(req): Json<SendRequest>,
 ) -> Json<serde_json::Value> {
     let mut sent = false;
-    
+
     if let Some(text) = req.text {
         if !text.trim().is_empty() {
             info!("Sending text message");
@@ -102,7 +109,7 @@ async fn send_message(
             sent = true;
         }
     }
-    
+
     if let Some(image_uri) = req.image {
         info!("Sending image ({} bytes)", image_uri.len());
         if let Some((mime, data)) = parse_data_uri(&image_uri) {
@@ -115,7 +122,7 @@ async fn send_message(
             tracing::warn!("Failed to parse image data URI");
         }
     }
-    
+
     if sent {
         Json(serde_json::json!({ "status": "ok" }))
     } else {
@@ -130,7 +137,9 @@ async fn send_video_frame(
     let data = match BASE64_STANDARD.decode(&req.data) {
         Ok(d) => d,
         Err(e) => {
-            return Json(serde_json::json!({ "status": "error", "message": format!("bad base64: {}", e) }));
+            return Json(
+                serde_json::json!({ "status": "error", "message": format!("bad base64: {}", e) }),
+            );
         }
     };
 
@@ -143,18 +152,16 @@ async fn send_video_frame(
     }
 }
 
-async fn get_video_stream(
-    Path(id): Path<u32>,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn get_video_stream(Path(id): Path<u32>, State(state): State<AppState>) -> impl IntoResponse {
     let rx = {
         let map = state.active_streams.lock().unwrap();
         map.get(&id).map(|(_, tx)| tx.subscribe())
     };
 
     if let Some(mut rx) = rx {
-        let (tx, axum_rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::convert::Infallible>>(4);
-        
+        let (tx, axum_rx) =
+            tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::convert::Infallible>>(4);
+
         tokio::spawn(async move {
             let mut last_len = 0;
             loop {
@@ -174,12 +181,14 @@ async fn get_video_stream(
                 }
             }
         });
-        
+
         let body = Body::from_stream(ReceiverStream::new(axum_rx));
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(
             axum::http::header::CONTENT_TYPE,
-            axum::http::header::HeaderValue::from_static("multipart/x-mixed-replace; boundary=frame"),
+            axum::http::header::HeaderValue::from_static(
+                "multipart/x-mixed-replace; boundary=frame",
+            ),
         );
         (headers, body).into_response()
     } else {
@@ -204,14 +213,16 @@ async fn raptor_ws_handler(
 }
 
 fn parse_data_uri(uri: &str) -> Option<(String, Vec<u8>)> {
-    if !uri.starts_with("data:") { return None; }
+    if !uri.starts_with("data:") {
+        return None;
+    }
     let comma_idx = uri.find(',')?;
     let header = &uri[5..comma_idx];
-    let data_str = &uri[comma_idx+1..];
-    
+    let data_str = &uri[comma_idx + 1..];
+
     let mime = header.split(';').next()?.to_string();
     let is_base64 = header.contains(";base64");
-    
+
     if is_base64 {
         BASE64_STANDARD.decode(data_str).ok().map(|d| (mime, d))
     } else {
@@ -224,7 +235,10 @@ async fn main() {
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
-    info!("Starting LITM API for Node {} on interface {}", cli.id, cli.iface);
+    info!(
+        "Starting LITM API for Node {} on interface {}",
+        cli.id, cli.iface
+    );
 
     let node = NodeBuilder::new(cli.id, &cli.password, &cli.iface)
         .build()
@@ -244,7 +258,11 @@ async fn main() {
                             (Some(content), None)
                         }
                         MessagePayload::Image { mime, bytes } => {
-                            info!("Received image message from {} ({} bytes)", msg.source, bytes.len());
+                            info!(
+                                "Received image message from {} ({} bytes)",
+                                msg.source,
+                                bytes.len()
+                            );
                             let b64 = BASE64_STANDARD.encode(&bytes);
                             (None, Some(format!("data:{};base64,{}", mime, b64)))
                         }
@@ -281,7 +299,9 @@ async fn main() {
 
     let video_ch = VideoChannel::new(node.transport());
     let mut video_rx = video_ch.subscribe();
-    let active_streams: Arc<Mutex<std::collections::HashMap<NodeId, (u64, tokio::sync::watch::Sender<Vec<u8>>)> >> = Arc::new(Mutex::new(std::collections::HashMap::new()));
+    let active_streams: Arc<
+        Mutex<std::collections::HashMap<NodeId, (u64, tokio::sync::watch::Sender<Vec<u8>>)>>,
+    > = Arc::new(Mutex::new(std::collections::HashMap::new()));
     let streams_clone = active_streams.clone();
 
     tokio::spawn(async move {
@@ -294,9 +314,12 @@ async fn main() {
                 jpeg_len = frame.jpeg_bytes.len(),
                 "Received video frame from mesh"
             );
-            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
             let mut map = streams_clone.lock().unwrap();
-            
+
             if let Some((ts, tx)) = map.get_mut(&frame.source) {
                 *ts = now;
                 let _ = tx.send(frame.jpeg_bytes);
@@ -305,13 +328,18 @@ async fn main() {
                 map.insert(frame.source, (now, tx));
                 info!(source = frame.source, "New active stream registered");
             }
-            
+
             map.retain(|_, (ts, _)| now - *ts < 10);
         }
         tracing::warn!("Video stream receiver task ended — channel closed");
     });
 
-    let state = AppState { node, messages, video_ch, active_streams };
+    let state = AppState {
+        node,
+        messages,
+        video_ch,
+        active_streams,
+    };
 
     let app = Router::new()
         .route("/api/data", get(get_data))
