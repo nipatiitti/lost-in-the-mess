@@ -81,7 +81,7 @@
         prr: n.prr,
         state: getPrrState(n.prr),
         dbm: n.rssi_dbm,
-        hops: 1, // still mock until mesh implements multi-hop Dijkstra export
+        hops: 1, // Default to 1 hop (direct); mesh topology routing not yet exported to UI
         x: 50 + radius * Math.cos(angle),
         y: 50 + radius * Math.sin(angle)
       });
@@ -92,14 +92,17 @@
 
   $: formattedMessages = data.messages.map((m, i) => {
     const d = new Date(m.timestamp * 1000);
+    const nodeLabel = `N-${m.source.toString().padStart(2, '0')}`;
+    const sourceNode = nodes.find(n => n.label === nodeLabel);
+    
     return {
       id: m.id || i,
       time: d.toISOString().split('T')[1].split('.')[0],
-      node: `N-${m.source.toString().padStart(2, '0')}`,
-      nodeState: "ok",
+      node: nodeLabel,
+      nodeState: sourceNode ? sourceNode.state : "ok",
       kind: "data",
       payload: m.text,
-      result: "OK"
+      result: "RECV"
     };
   }).reverse();
 

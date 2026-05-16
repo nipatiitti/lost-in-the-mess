@@ -86,8 +86,8 @@
           <div style="width:{node.prr*100}%;height:100%;background:{colorForState(node.state)}"></div>
         </div>
         <div class="mono" style="font-size:10px;color:var(--bone-300);margin-top:10px;display:flex;justify-content:space-between">
-          <span>{node.dbm || -65}dBm</span>
-          <span>{node.hops === 0 ? "HUB" : `${node.hops || 1} HOP${node.hops>1?"S":""}`}</span>
+          <span>{node.dbm} dBm</span>
+          <span>{node.id === "HUB" ? "LOCAL" : `${node.hops || 1} HOP${node.hops > 1 ? "S" : ""}`}</span>
         </div>
       </div>
     {/each}
