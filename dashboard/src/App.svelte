@@ -199,8 +199,9 @@
       time: d.toISOString().split('T')[1].split('.')[0],
       node: nodeLabel,
       nodeState: sourceNode ? sourceNode.state : "ok",
-      kind: "data",
-      payload: m.text,
+      kind: m.image ? "image" : "text",
+      payload: m.image ? "IMAGE ATTACHMENT" : (m.text !== null && m.text !== "" ? m.text : "EMPTY"),
+      image: m.image,
       result: "RECV"
     };
   }).reverse();
@@ -209,13 +210,13 @@
     ? `${formattedMessages[0].node} · ${formattedMessages[0].kind} · ${formattedMessages[0].result}` 
     : "No recent events";
 
-  async function handleSend({ target, kind, text }) {
+  async function handleSend({ target, kind, text, image }) {
     // Send to API
     try {
       const res = await fetch('/api/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text })
+        body: JSON.stringify({ text, image })
       });
       if (res.ok) {
         lastResult = { result: "OK", message: `Packet committed → ${target}.` };

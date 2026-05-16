@@ -9,6 +9,19 @@
   let target = nodes.length > 1 ? nodes.find(n => n.id !== "HUB")?.id : "";
   let kind = "text";
   let text = "";
+  let imageFile = null;
+  let imagePreview = null;
+
+  function handleFileSelect(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    imageFile = file;
+    const reader = new FileReader();
+    reader.onload = (re) => {
+      imagePreview = re.target.result;
+    };
+    reader.readAsDataURL(file);
+  }
 
   $: targetNode = nodes.find(n => n.id === target);
   $: expectedPrr = targetNode ? targetNode.prr : 1;
@@ -42,8 +55,10 @@
   }
 
   function handleSend() {
-    onSend({ target, kind, text });
+    onSend({ target, kind, text, image: kind === 'image' ? imagePreview : null });
     text = "";
+    imageFile = null;
+    imagePreview = null;
   }
 </script>
 
@@ -114,6 +129,20 @@
             border-radius:2px;padding:12px 14px;color:var(--bone-100);
             font-family:var(--font-mono);font-size:13px;outline:none;resize:vertical;
           "></textarea>
+      {:else if kind === "image"}
+        <div style="position:relative">
+          <input type="file" accept="image/*" on:change={handleFileSelect} 
+            style="position:absolute;inset:0;opacity:0;cursor:pointer;z-index:2" />
+          <div style="border:1px dashed {imagePreview ? 'var(--signal-300)' : 'var(--border-strong)'};border-radius:2px;padding:32px 14px;text-align:center;color:var(--bone-400);background:var(--ink-100)">
+            {#if imagePreview}
+              <img src={imagePreview} alt="preview" style="max-height:120px;max-width:100%;border-radius:2px;margin:0 auto;display:block;margin-bottom:12px" />
+              <div class="mono" style="font-size:10px;color:var(--signal-300)">{imageFile?.name} · READY</div>
+            {:else}
+              <div style="font-family:var(--font-mono);font-size:12px;letter-spacing:0.14em;text-transform:uppercase">DROP IMAGE HERE</div>
+              <div class="stamp" style="font-size:9px;margin-top:6px">OR CLICK TO BROWSE</div>
+            {/if}
+          </div>
+        </div>
       {:else}
         <div style="border:1px dashed var(--border-strong);border-radius:2px;padding:32px 14px;text-align:center;color:var(--bone-400)">
           <div style="font-family:var(--font-mono);font-size:12px;letter-spacing:0.14em;text-transform:uppercase">DROP {kind.toUpperCase()} HERE</div>
