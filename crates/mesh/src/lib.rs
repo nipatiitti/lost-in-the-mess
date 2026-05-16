@@ -255,8 +255,9 @@ impl MeshService {
         let hashes = Arc::clone(&seen_hashes);
 
         tokio::spawn(async move {
-            while let Some((_meta, payload)) = rx.recv().await {
+            while let Some((meta, payload)) = rx.recv().await {
                 let hash: [u8; 32] = blake3::hash(&payload).into();
+                let origin_id = meta.origin_id;
 
                 let is_new = {
                     let mut lock = hashes.write().unwrap();
@@ -288,7 +289,7 @@ impl MeshService {
                                 .unwrap()
                                 .entry(hash)
                                 .and_modify(|e| e.0 = 2);
-                            let _ = t_transport_clone.broadcast(kind, &payload_clone);
+                            let _ = t_transport_clone.broadcast_forwarded(kind, &payload_clone, origin_id);
                         }
                     });
                 }

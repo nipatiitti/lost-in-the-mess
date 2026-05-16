@@ -99,7 +99,7 @@ impl VideoChannel {
                     continue;
                 }
                 let data = payload[HDR..].to_vec();
-                let source = meta.sender_id;
+                let source = meta.origin_id;
 
                 let entry = buffers.entry(source).or_insert((frame_id, total, HashMap::new()));
 

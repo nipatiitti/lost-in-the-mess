@@ -237,12 +237,12 @@ deliberately small:
 - **Error/Result:** one shared `Error` enum, one `Result<T>`. No anyhow,
   no per-crate error types.
 - **`Kind`:** `Beacon | Fec | Control`.
-- **`PacketMeta`:** sender_id, rssi_dbm, recv_time.
+- **`PacketMeta`:** sender_id (last-hop forwarder), origin_id (original creator, preserved through floods), rssi_dbm, recv_time.
 - **`ObjectBitmap`:** 256-bit ring of recently-decoded objects, indexing via a hash of `(source_node, object_id)` to avoid collisions.
 - **`SendPolicy`:** desired_coverage, ttl, priority.
 - **`DeliveredObject`:** id, source, payload.
 - **`NeighborInfo`:** id, prr, last_seen, bitmap.
-- **Traits:** `Transport`, `Delivery`, `Mesh`.
+- **Traits:** `Transport` (`broadcast` + `broadcast_forwarded` + `subscribe` + `set_channel`), `Delivery`, `Mesh`.
 
 Trait dependencies:
 
@@ -263,20 +263,21 @@ This is maintained by the `mesh` layer.
 ### Transport envelope (owned by `transport`)
 
 ```
- byte:  0   1   2          6          10                 18
-        +---+---+----------+----------+------------------+--------------------------+
-        |ver|flg|  epoch   |   sid    |     counter      |  ciphertext + tag (16B)  |
-        | 1 | 1 |    4     |    4     |        8         |     variable length      |
-        +---+---+----------+----------+------------------+--------------------------+
-        \________________________ AAD (18 bytes) ______/\______ AEAD output ________/
+ byte:  0   1   2          6          10         14                 22
+        +---+---+----------+----------+----------+------------------+--------------------------+
+        |ver|flg|  epoch   |  sender  |  origin  |     counter      |  ciphertext + tag (16B)  |
+        | 1 | 1 |    4     |    4     |    4     |        8         |     variable length      |
+        +---+---+----------+----------+----------+------------------+--------------------------+
+        \_________________________________ AAD (22 bytes) _______/\______ AEAD output ________/
 ```
 
+- `sender` — last-hop forwarder (the node that put this frame on the air).
+- `origin` — node that originally created the packet; preserved unchanged through all flood hops.
 - AEAD: ChaCha20-Poly1305 (RustCrypto).
-- Nonce (12B) = `sid (4B) || counter (8B)` — globally unique without
-  coordination.
-- AAD = the first 18 bytes of the wire frame.
+- Nonce (12B) = `sender (4B) || counter (8B)` — globally unique per forwarder without coordination.
+- AAD = the first 22 bytes of the wire frame.
 - Plaintext = `Kind (1B) || inner payload (≤ MAX_PLAINTEXT-1)`.
-- Per-packet overhead: **34 bytes** (18 header + 16 tag).
+- Per-packet overhead: **38 bytes** (22 header + 16 tag).
 
 ### Key schedule
 

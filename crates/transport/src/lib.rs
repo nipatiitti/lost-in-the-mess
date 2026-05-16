@@ -243,6 +243,7 @@ impl WifiTransport {
         let inner = pt[3..3 + payload_len].to_vec();
         let meta = PacketMeta {
             sender_id: header.sender,
+            origin_id: header.origin,
             counter: header.counter,
             rssi_dbm,
             recv_time: Instant::now(),
@@ -269,12 +270,8 @@ impl WifiTransport {
     }
 }
 
-impl Transport for WifiTransport {
-    fn local_id(&self) -> NodeId {
-        self.local_id
-    }
-
-    fn broadcast(&self, kind: Kind, payload: &[u8]) -> Result<()> {
+impl WifiTransport {
+    fn broadcast_with_origin(&self, kind: Kind, payload: &[u8], origin: NodeId) -> Result<()> {
         // Plaintext layout: Kind(1) | payload_len(2 BE) | payload | zero-pad.
         // FEC and Control frames are padded to MAX_PLAINTEXT for LPI/LPD.
         // Beacons are sent at their natural size (hackathon trade-off: saves beacon
@@ -289,6 +286,7 @@ impl Transport for WifiTransport {
             flags: 0,
             epoch,
             sender: self.local_id,
+            origin,
             counter,
         };
 
@@ -321,6 +319,20 @@ impl Transport for WifiTransport {
             Error::Backpressure
         })?;
         Ok(())
+    }
+}
+
+impl Transport for WifiTransport {
+    fn local_id(&self) -> NodeId {
+        self.local_id
+    }
+
+    fn broadcast(&self, kind: Kind, payload: &[u8]) -> Result<()> {
+        self.broadcast_with_origin(kind, payload, self.local_id)
+    }
+
+    fn broadcast_forwarded(&self, kind: Kind, payload: &[u8], origin: NodeId) -> Result<()> {
+        self.broadcast_with_origin(kind, payload, origin)
     }
 
     fn subscribe(&self, kind: Kind) -> mpsc::Receiver<(PacketMeta, Vec<u8>)> {

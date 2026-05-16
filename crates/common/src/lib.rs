@@ -54,7 +54,10 @@ pub enum Kind {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PacketMeta {
+    /// Last-hop forwarder (or the original sender if no hops).
     pub sender_id: NodeId,
+    /// Node that first created this packet; preserved through all flood hops.
+    pub origin_id: NodeId,
     pub counter: u64,
     pub rssi_dbm: i8,
     #[serde(skip, default = "Instant::now")]
@@ -122,7 +125,10 @@ pub struct NeighborInfo {
 /// Authenticated, replay-protected, unreliable broadcast.
 pub trait Transport: Send + Sync + 'static {
     fn local_id(&self) -> NodeId;
+    /// Broadcast as this node (sets origin = local_id).
     fn broadcast(&self, kind: Kind, payload: &[u8]) -> Result<()>;
+    /// Re-broadcast a flooded packet, preserving the original `origin`.
+    fn broadcast_forwarded(&self, kind: Kind, payload: &[u8], origin: NodeId) -> Result<()>;
     fn subscribe(&self, kind: Kind) -> mpsc::Receiver<(PacketMeta, Vec<u8>)>;
     fn set_channel(&self, ch: u8) -> Result<()>;
 }

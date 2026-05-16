@@ -70,7 +70,7 @@ impl<T: Transport + 'static + ?Sized> RaptorQDelivery<T> {
         let delivery_clone = delivery.clone();
         tokio::spawn(async move {
             while let Some((meta, payload)) = rx.recv().await {
-                delivery_clone.handle_packet(meta.sender_id, &payload).await;
+                delivery_clone.handle_packet(meta.origin_id, &payload).await;
             }
         });
 

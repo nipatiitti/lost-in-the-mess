@@ -1,14 +1,17 @@
-//! Wire frame: 18-byte plaintext header (also AAD) + AEAD payload.
+//! Wire frame: 22-byte plaintext header (also AAD) + AEAD payload.
 //!
-//!  0   1   2          6          10                 18
-//!  +---+---+----------+----------+------------------+----------------+
-//!  |ver|flg|  epoch   |   sid    |     counter      | ct + tag (16B) |
-//!  | 1 | 1 |    4 BE  |    4 BE  |        8 BE      |    variable    |
-//!  +---+---+----------+----------+------------------+----------------+
+//!  0   1   2          6          10         14                 22
+//!  +---+---+----------+----------+----------+------------------+----------------+
+//!  |ver|flg|  epoch   |  sender  |  origin  |     counter      | ct + tag (16B) |
+//!  | 1 | 1 |    4 BE  |    4 BE  |    4 BE  |        8 BE      |    variable    |
+//!  +---+---+----------+----------+----------+------------------+----------------+
+//!
+//! `sender` is the last-hop forwarder; `origin` is the node that first created
+//! the packet and is preserved unchanged through all flood hops.
 
 use litm_common::{Epoch, Error, NodeId, PROTOCOL_VERSION, Result};
 
-pub const HEADER_LEN: usize = 18;
+pub const HEADER_LEN: usize = 22;
 
 #[derive(Copy, Clone, Debug)]
 pub struct Header {
@@ -16,6 +19,7 @@ pub struct Header {
     pub flags: u8,
     pub epoch: Epoch,
     pub sender: NodeId,
+    pub origin: NodeId,
     pub counter: u64,
 }
 
@@ -28,7 +32,8 @@ impl Header {
         out[1] = self.flags;
         out[2..6].copy_from_slice(&self.epoch.to_be_bytes());
         out[6..10].copy_from_slice(&self.sender.to_be_bytes());
-        out[10..18].copy_from_slice(&self.counter.to_be_bytes());
+        out[10..14].copy_from_slice(&self.origin.to_be_bytes());
+        out[14..22].copy_from_slice(&self.counter.to_be_bytes());
         Ok(())
     }
 
@@ -44,7 +49,8 @@ impl Header {
             flags: buf[1],
             epoch: u32::from_be_bytes(buf[2..6].try_into().unwrap()),
             sender: u32::from_be_bytes(buf[6..10].try_into().unwrap()),
-            counter: u64::from_be_bytes(buf[10..18].try_into().unwrap()),
+            origin: u32::from_be_bytes(buf[10..14].try_into().unwrap()),
+            counter: u64::from_be_bytes(buf[14..22].try_into().unwrap()),
         })
     }
 
@@ -68,6 +74,7 @@ mod tests {
             flags: 0,
             epoch: 7,
             sender: 42,
+            origin: 99,
             counter: 0xdead_beef,
         };
         let mut buf = [0u8; HEADER_LEN];
@@ -75,6 +82,7 @@ mod tests {
         let d = Header::decode(&buf).unwrap();
         assert_eq!(d.epoch, 7);
         assert_eq!(d.sender, 42);
+        assert_eq!(d.origin, 99);
         assert_eq!(d.counter, 0xdead_beef);
     }
 
@@ -85,6 +93,7 @@ mod tests {
             flags: 0,
             epoch: 0,
             sender: 0x01020304,
+            origin: 0x01020304,
             counter: 0x05060708090a0b0c,
         };
         assert_eq!(h.nonce(), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
@@ -95,5 +104,10 @@ mod tests {
         let mut buf = [0u8; HEADER_LEN];
         buf[0] = 99;
         assert!(Header::decode(&buf).is_err());
+    }
+
+    #[test]
+    fn header_len_is_22() {
+        assert_eq!(HEADER_LEN, 22);
     }
 }

@@ -142,6 +142,7 @@ mod tests {
     impl Transport for MockTransport {
         fn local_id(&self) -> NodeId { 1 }
         fn broadcast(&self, _kind: Kind, _payload: &[u8]) -> CommonResult<()> { Ok(()) }
+        fn broadcast_forwarded(&self, _kind: Kind, _payload: &[u8], _origin: NodeId) -> CommonResult<()> { Ok(()) }
         fn subscribe(&self, _kind: Kind) -> mpsc::Receiver<(PacketMeta, Vec<u8>)> {
             mpsc::channel(1).1
         }
