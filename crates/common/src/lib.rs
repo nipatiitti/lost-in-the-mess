@@ -108,7 +108,8 @@ pub struct DeliveredObject {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NeighborInfo {
     pub id: NodeId,
-    pub prr: f32, // 0.0..=1.0, rolling estimate
+    pub prr: f32,      // 0.0..=1.0, blended RSSI + delivery ratio
+    pub rssi_dbm: i8,  // smoothed RSSI from radio hardware
     #[serde(skip, default = "Instant::now")]
     pub last_seen: Instant,
     pub bitmap: ObjectBitmap,
