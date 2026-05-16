@@ -10,12 +10,13 @@ pub fn derive_root_key(password: &str) -> [u8; 32] {
     Sha256::digest(password.as_bytes()).into()
 }
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use tokio::sync::mpsc;
-use tracing::{trace, warn};
+use tracing::{info, trace, warn};
 
 use litm_common::{
     Epoch, Error, Kind, MAX_PLAINTEXT, NodeId, PROTOCOL_VERSION, PacketMeta, Result, Transport,
@@ -38,6 +39,20 @@ pub struct WifiTransportConfig {
     pub root_key: [u8; 32],
 }
 
+#[derive(Default)]
+struct TransportStats {
+    // Drop counters
+    radio_queue_full: AtomicU64,
+    subscriber_full: AtomicU64,
+    decrypt_fail: AtomicU64,
+    replay: AtomicU64,
+    frame_gaps: AtomicU64,
+    // Per-kind receive counters — lets us separate beacon loss from FEC/control loss
+    rx_beacon: AtomicU64,
+    rx_fec: AtomicU64,
+    rx_control: AtomicU64,
+}
+
 pub struct WifiTransport {
     local_id: NodeId,
     keys: Arc<KeyStore>,
@@ -45,6 +60,9 @@ pub struct WifiTransport {
     send_counter: AtomicU64,
     radio: Radio,
     subscribers: Arc<Mutex<Subscribers>>,
+    stats: Arc<TransportStats>,
+    /// Last seen counter per remote sender — for gap detection.
+    last_counter: Arc<Mutex<HashMap<NodeId, u64>>>,
 }
 
 #[derive(Default)]
@@ -74,6 +92,7 @@ impl WifiTransport {
         tracing::info!(epoch, "starting radio");
         let radio = Radio::start(cfg.radio)?;
 
+        let stats = Arc::new(TransportStats::default());
         let me = Arc::new(Self {
             local_id: cfg.local_id,
             keys,
@@ -81,6 +100,8 @@ impl WifiTransport {
             send_counter: AtomicU64::new(1),
             radio,
             subscribers: Arc::new(Mutex::new(Subscribers::default())),
+            stats: stats.clone(),
+            last_counter: Arc::new(Mutex::new(HashMap::new())),
         });
 
         // Epoch advance: every 60s, slide the key window.
@@ -92,6 +113,42 @@ impl WifiTransport {
                 loop {
                     iv.tick().await;
                     me2.keys.advance(current_epoch());
+                }
+            });
+        }
+
+        // Periodic stats report every 10 s.
+        {
+            tokio::spawn(async move {
+                let mut iv = tokio::time::interval(std::time::Duration::from_secs(10));
+                iv.tick().await; // skip immediate
+                loop {
+                    iv.tick().await;
+                    let radio = stats.radio_queue_full.load(Ordering::Relaxed);
+                    let sub = stats.subscriber_full.load(Ordering::Relaxed);
+                    let decrypt = stats.decrypt_fail.load(Ordering::Relaxed);
+                    let replay = stats.replay.load(Ordering::Relaxed);
+                    let gaps = stats.frame_gaps.load(Ordering::Relaxed);
+                    let rx_beacon = stats.rx_beacon.load(Ordering::Relaxed);
+                    let rx_fec = stats.rx_fec.load(Ordering::Relaxed);
+                    let rx_control = stats.rx_control.load(Ordering::Relaxed);
+                    let level = if radio + sub + decrypt + replay + gaps > 0 { "WARN" } else { "INFO" };
+                    if level == "WARN" {
+                        warn!(
+                            rx_beacon, rx_fec, rx_control,
+                            radio_queue_full = radio,
+                            subscriber_full = sub,
+                            decrypt_fail = decrypt,
+                            replay = replay,
+                            frame_gaps = gaps,
+                            "transport stats (cumulative)"
+                        );
+                    } else {
+                        info!(
+                            rx_beacon, rx_fec, rx_control,
+                            "transport stats (cumulative, no drops)"
+                        );
+                    }
                 }
             });
         }
@@ -123,7 +180,11 @@ impl WifiTransport {
         }
         let aad = &bytes[..HEADER_LEN];
         let ct = &bytes[HEADER_LEN..];
-        let pt = self.keys.open(header.epoch, &header.nonce(), aad, ct)?;
+        let pt = self.keys.open(header.epoch, &header.nonce(), aad, ct).map_err(|e| {
+            self.stats.decrypt_fail.fetch_add(1, Ordering::Relaxed);
+            warn!(sender = header.sender, epoch = header.epoch, counter = header.counter, "AEAD decrypt failed — wrong key or corrupted frame");
+            e
+        })?;
 
         // Replay check AFTER AEAD verification.
         if self
@@ -131,7 +192,27 @@ impl WifiTransport {
             .check_and_mark(header.sender, header.counter)
             .is_err()
         {
+            self.stats.replay.fetch_add(1, Ordering::Relaxed);
+            warn!(sender = header.sender, counter = header.counter, "replay detected");
             return Err(Error::Replay);
+        }
+
+        // Gap detection: accumulate missed frames per sender; individual gaps logged at debug.
+        {
+            let mut last = self.last_counter.lock().unwrap();
+            let entry = last.entry(header.sender).or_insert(header.counter);
+            if header.counter > *entry + 1 {
+                let missed = header.counter - *entry - 1;
+                self.stats.frame_gaps.fetch_add(missed, Ordering::Relaxed);
+                tracing::debug!(
+                    sender = header.sender,
+                    last_counter = *entry,
+                    current_counter = header.counter,
+                    missed_frames = missed,
+                    "counter gap"
+                );
+            }
+            *entry = header.counter;
         }
 
         // Plaintext layout: Kind(1) | payload_len(2 BE) | payload | padding.
@@ -143,6 +224,11 @@ impl WifiTransport {
             1 => Kind::Fec,
             2 => Kind::Control,
             _ => return Err(Error::BadFrame("unknown kind")),
+        };
+        match kind {
+            Kind::Beacon => self.stats.rx_beacon.fetch_add(1, Ordering::Relaxed),
+            Kind::Fec => self.stats.rx_fec.fetch_add(1, Ordering::Relaxed),
+            Kind::Control => self.stats.rx_control.fetch_add(1, Ordering::Relaxed),
         };
         let payload_len = u16::from_be_bytes([pt[1], pt[2]]) as usize;
         if 3 + payload_len > pt.len() {
@@ -161,7 +247,14 @@ impl WifiTransport {
             .retain(|s| match s.try_send((meta.clone(), inner.clone())) {
                 Ok(()) => true,
                 Err(mpsc::error::TrySendError::Full(_)) => {
-                    warn!(?kind, "subscriber full, dropping");
+                    self.stats.subscriber_full.fetch_add(1, Ordering::Relaxed);
+                    warn!(
+                        ?kind,
+                        sender = header.sender,
+                        counter = header.counter,
+                        queue_capacity = SUBSCRIBER_QUEUE,
+                        "subscriber channel full — frame dropped, consumer too slow"
+                    );
                     true
                 }
                 Err(mpsc::error::TrySendError::Closed(_)) => false,
@@ -204,10 +297,16 @@ impl Transport for WifiTransport {
         let ct = self.keys.seal(epoch, &header.nonce(), &wire, &pt)?;
         wire.extend_from_slice(&ct);
 
-        self.radio
-            .tx_queue
-            .try_send(wire)
-            .map_err(|_| Error::Backpressure)?;
+        self.radio.tx_queue.try_send(wire).map_err(|e| {
+            let depth = self.radio.tx_queue.len();
+            warn!(
+                ?kind,
+                tx_queue_depth = depth,
+                capacity = 256,
+                "TX queue full — broadcast dropped due to backpressure: {e}"
+            );
+            Error::Backpressure
+        })?;
         Ok(())
     }
 

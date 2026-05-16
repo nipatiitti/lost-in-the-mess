@@ -28,7 +28,8 @@ impl Default for RadioConfig {
             stream_id: 0xA11CE,
             mcs_index: 1,
             bandwidth: 40,
-            ring_size: 16,
+            // 16 was too small: FEC bursts overflow the ring before the 200ms-poll RX thread drains it.
+            ring_size: 128,
         }
     }
 }
@@ -57,7 +58,7 @@ impl Radio {
         let rx_cfg = WfbRxConfig {
             iface: cfg.iface.clone(),
             stream_id: cfg.stream_id,
-            rcv_buf_size: None,
+            rcv_buf_size: Some(4 * 1024 * 1024), // 4 MB — default ~212 KB is too small for bursts
             ignore_self_injected: true,
             ring_size: cfg.ring_size,
         };
@@ -101,8 +102,11 @@ impl Radio {
                                 bytes: buf[..n].to_vec(),
                                 rssi_dbm: meta.rssi[0],
                             };
+                            let depth = rx_out_s.len();
                             if rx_out_s.try_send(frame).is_err() {
-                                warn!("litm rx fanout queue full, dropping");
+                                warn!(queue_depth = depth, capacity = 256, "litm rx fanout queue full — frame dropped at radio layer");
+                            } else if depth > 200 {
+                                warn!(queue_depth = depth, capacity = 256, "litm rx fanout queue near capacity");
                             }
                         }
                         Ok(None) => continue,
