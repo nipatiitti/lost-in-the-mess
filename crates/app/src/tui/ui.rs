@@ -164,20 +164,66 @@ fn render_compose(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_video(f: &mut Frame, area: Rect, app: &App, picker: &mut Picker) {
+    let halves = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(area);
+
+    render_received_video(f, halves[0], app, picker);
+    render_local_camera(f, halves[1], app, picker);
+}
+
+fn render_received_video(f: &mut Frame, area: Rect, app: &App, picker: &mut Picker) {
     let title = match &app.latest_video {
-        Some(v) => format!(" Video  from:{}  seq:{} ", v.source, v.seq),
-        None    => " Video  (waiting for stream...) ".to_string(),
+        Some(v) => format!(" Received  from:{}  seq:{} ", v.source, v.seq),
+        None    => " Received  (waiting...) ".to_string(),
     };
     let block = Block::default().borders(Borders::ALL).title(title);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     if let Some(ref frame) = app.latest_video {
-        let mut protocol = picker.new_resize_protocol(frame.image.clone());
-        f.render_stateful_widget(StatefulImage::default(), inner, &mut protocol);
+        let mut proto = picker.new_resize_protocol(frame.image.clone());
+        f.render_stateful_widget(StatefulImage::default(), inner, &mut proto);
     } else {
         f.render_widget(
-            Paragraph::new("No video received yet.\nWaiting for MJPEG or Raw stream...")
+            Paragraph::new("No stream received")
+                .style(Style::default().fg(Color::DarkGray)),
+            inner,
+        );
+    }
+}
+
+fn render_local_camera(f: &mut Frame, area: Rect, app: &App, picker: &mut Picker) {
+    let (status, status_style) = if app.streaming {
+        (
+            format!(" Camera  \u{25cf} LIVE  {} frames  [s] stop ", app.stream_frames_sent),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )
+    } else {
+        (
+            " Camera  \u{25cb} idle  [s] start streaming ".to_string(),
+            Style::default().fg(Color::DarkGray),
+        )
+    };
+
+    let block = Block::default().borders(Borders::ALL)
+        .title(Span::styled(status, status_style));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if let Some(ref img) = app.local_preview {
+        let mut proto = picker.new_resize_protocol(img.clone());
+        f.render_stateful_widget(StatefulImage::default(), inner, &mut proto);
+    } else if app.streaming {
+        f.render_widget(
+            Paragraph::new("Opening camera...")
+                .style(Style::default().fg(Color::Yellow)),
+            inner,
+        );
+    } else {
+        f.render_widget(
+            Paragraph::new("Press [s] to start streaming your camera")
                 .style(Style::default().fg(Color::DarkGray)),
             inner,
         );

@@ -5,6 +5,8 @@ use chrono::{DateTime, Local};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use litm_common::{NeighborInfo, NodeId};
 
+use tokio::sync::mpsc;
+
 use super::events::{AppEvent, DecodedVideoFrame};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -32,10 +34,14 @@ pub struct App {
     pub compose_input: String,
     pub compose_cursor: usize,
     pub latest_video: Option<DecodedVideoFrame>,
+    pub streaming: bool,
+    pub local_preview: Option<image::DynamicImage>,
+    pub stream_frames_sent: u64,
+    cam_cmd_tx: mpsc::Sender<bool>,
 }
 
 impl App {
-    pub fn new(local_id: NodeId, node: Node) -> Self {
+    pub fn new(local_id: NodeId, node: Node, cam_cmd_tx: mpsc::Sender<bool>) -> Self {
         Self {
             local_id,
             node,
@@ -48,6 +54,10 @@ impl App {
             compose_input: String::new(),
             compose_cursor: 0,
             latest_video: None,
+            streaming: false,
+            local_preview: None,
+            stream_frames_sent: 0,
+            cam_cmd_tx,
         }
     }
 
@@ -72,6 +82,11 @@ impl App {
 
             AppEvent::VideoFrame(frame) => {
                 self.latest_video = Some(frame);
+            }
+
+            AppEvent::LocalPreview(img) => {
+                self.local_preview = Some(img);
+                self.stream_frames_sent += 1;
             }
 
             AppEvent::MeshClosed => {
@@ -102,6 +117,14 @@ impl App {
             }
             KeyCode::Tab => self.cycle_panel(1),
             KeyCode::BackTab => self.cycle_panel(-1),
+            KeyCode::Char('s') if self.active_panel == ActivePanel::Video => {
+                self.streaming = !self.streaming;
+                let _ = self.cam_cmd_tx.try_send(self.streaming);
+                if !self.streaming {
+                    self.local_preview = None;
+                    self.stream_frames_sent = 0;
+                }
+            }
             KeyCode::Down | KeyCode::Char('j') if self.compose_input.is_empty() => {
                 if self.active_panel == ActivePanel::Messages {
                     let max = self.messages.len().saturating_sub(1);

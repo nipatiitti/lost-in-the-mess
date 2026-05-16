@@ -1,4 +1,5 @@
 mod app;
+mod camera;
 mod events;
 mod ui;
 
@@ -16,6 +17,7 @@ use image::DynamicImage;
 use litm_common::NodeId;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use ratatui_image::picker::Picker;
+use tokio::sync::mpsc;
 
 use app::App;
 use events::{AppEvent, DecodedVideoFrame};
@@ -41,7 +43,15 @@ pub async fn run(id: NodeId, password: &str, iface: &str) -> anyhow::Result<()> 
 
     let mut picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
 
-    let mut app = App::new(id, node.clone());
+    let (cam_cmd_tx, cam_cmd_rx) = mpsc::channel::<bool>(4);
+    let (preview_tx, mut preview_rx) = mpsc::channel::<DynamicImage>(2);
+
+    let node_for_cam = node.clone();
+    std::thread::spawn(move || {
+        camera::run_capture(node_for_cam, cam_cmd_rx, preview_tx);
+    });
+
+    let mut app = App::new(id, node.clone(), cam_cmd_tx);
     let mut mesh_rx = node.subscribe();
     let mut term_events = EventStream::new();
     let mut topo_tick = tokio::time::interval(Duration::from_secs(1));
@@ -81,6 +91,10 @@ pub async fn run(id: NodeId, password: &str, iface: &str) -> anyhow::Result<()> 
                 Ok(_) => continue,
                 Err(SdkError::Lagged) => continue,
                 Err(_) => AppEvent::MeshClosed,
+            },
+            maybe_preview = preview_rx.recv() => match maybe_preview {
+                Some(img) => AppEvent::LocalPreview(img),
+                None => continue,
             },
             _ = topo_tick.tick() => AppEvent::TopologyTick,
         };

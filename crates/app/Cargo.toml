@@ -20,3 +20,4 @@ futures     = "0.3"
 clap        = { version = "4.4", features = ["derive"] }
 ratatui-image = { version = "11.0.2", default-features = false, features = ["crossterm", "image-defaults"] }
 image       = { version = "0.25", default-features = false, features = ["jpeg"] }
+nokhwa      = { version = "0.10", default-features = false, features = ["input-native"] }

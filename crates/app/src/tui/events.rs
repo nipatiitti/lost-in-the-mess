@@ -13,4 +13,5 @@ pub enum AppEvent {
     TopologyTick,
     MeshClosed,
     VideoFrame(DecodedVideoFrame),
+    LocalPreview(image::DynamicImage),
 }
