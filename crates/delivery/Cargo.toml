@@ -9,3 +9,6 @@ rand = "0.10.1"
 raptorq = "2.0.1"
 litm-common = { path = "../common" }
 tokio = { version = "1", features = ["sync", "time", "rt", "macros"] }
+
+[dev-dependencies]
+litm-transport = { path = "../transport" }

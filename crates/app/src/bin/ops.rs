@@ -179,12 +179,16 @@ enum Commands {
     Launcher {
         #[arg(short, long)]
         nodes: usize,
+        #[arg(short, long)]
+        simulation: bool,
     },
     Node {
         #[arg(short, long)]
         id: NodeId,
         #[arg(long, default_value = "")]
         ignore: String,
+        #[arg(short, long)]
+        simulation: bool,
     },
     SendImage {
         #[arg(short, long)]
@@ -206,7 +210,7 @@ async fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Launcher { nodes } => {
+        Commands::Launcher { nodes, simulation } => {
             info!("Launching {} nodes", nodes);
             let mut children = Vec::new();
             for i in 1..=nodes {
@@ -226,6 +230,9 @@ async fn main() {
                 if !ignore_str.is_empty() {
                     cmd.arg("--ignore").arg(ignore_str);
                 }
+                if simulation {
+                    cmd.arg("--simulation");
+                }
                 let child = cmd.spawn().expect("failed to spawn node");
                 children.push(child);
             }
@@ -244,17 +251,28 @@ async fn main() {
                 let _ = child.kill();
             }
         }
-        Commands::Node { id, ignore } => {
+        Commands::Node { id, ignore, simulation } => {
             info!("Starting Node {}", id);
             let ignored_nodes = ignore
                 .split(',')
                 .filter_map(|s| s.parse::<NodeId>().ok())
                 .collect::<Vec<_>>();
 
-            let transport = MockTransport::new(id, ignored_nodes).await;
+            let transport: Arc<dyn Transport> = if simulation {
+                MockTransport::new(id, ignored_nodes).await
+            } else {
+                let mut root_key = [0u8; 32];
+                let cfg = litm_transport::WifiTransportConfig {
+                    local_id: id,
+                    radio: litm_transport::RadioConfig::default(),
+                    root_key,
+                };
+                litm_transport::WifiTransport::start(cfg).expect("Failed to start WifiTransport")
+            };
+
             let delivery = RaptorQDelivery::new(Arc::clone(&transport));
             let _mesh = MeshService::new(
-                Arc::clone(&transport) as Arc<dyn Transport>,
+                Arc::clone(&transport),
                 delivery.clone(),
             );
 

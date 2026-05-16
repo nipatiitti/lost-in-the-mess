@@ -1,15 +1,27 @@
-use litm_common::{Delivery, SendPolicy};
+use litm_common::{Delivery, SendPolicy, Transport};
 use litm_delivery::RaptorQDelivery;
-use litm_delivery::mock::MockNetwork;
+use litm_transport::{WifiTransport, WifiTransportConfig, RadioConfig};
 use std::sync::Arc;
 use std::time::Duration;
 
 #[tokio::test]
-async fn test_reliable_broadcast_with_drop() {
-    let network = MockNetwork::new(0.2); // 20% drop rate
+async fn test_reliable_broadcast_with_real_radio() {
+    let root_key = [0u8; 32];
+    
+    let cfg1 = WifiTransportConfig {
+        local_id: 1,
+        radio: RadioConfig::default(),
+        root_key,
+    };
+    
+    let cfg2 = WifiTransportConfig {
+        local_id: 2,
+        radio: RadioConfig::default(),
+        root_key,
+    };
 
-    let sender_transport = Arc::new(network.create_transport(1));
-    let receiver_transport = Arc::new(network.create_transport(2));
+    let sender_transport: Arc<dyn Transport> = WifiTransport::start(cfg1).expect("Sender WifiTransport failed");
+    let receiver_transport: Arc<dyn Transport> = WifiTransport::start(cfg2).expect("Receiver WifiTransport failed");
 
     let sender = RaptorQDelivery::new(sender_transport);
     let receiver = RaptorQDelivery::new(receiver_transport);
@@ -31,7 +43,7 @@ async fn test_reliable_broadcast_with_drop() {
     sender.send_object(42, payload.clone(), policy).unwrap();
 
     // Wait for the receiver to get the message
-    let result = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+    let result = tokio::time::timeout(Duration::from_secs(15), rx.recv())
         .await
         .expect("Test timed out waiting for payload")
         .expect("Channel closed");

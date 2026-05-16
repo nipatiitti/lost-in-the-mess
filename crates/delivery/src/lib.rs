@@ -1,5 +1,4 @@
 pub mod frame;
-pub mod mock;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

@@ -584,6 +584,7 @@ name = "litm-delivery"
 version = "0.1.0"
 dependencies = [
  "litm-common",
+ "litm-transport",
  "rand 0.10.1",
  "raptorq",
  "tokio",
