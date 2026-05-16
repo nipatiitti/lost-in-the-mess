@@ -37,3 +37,49 @@ impl FecFrame {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_frame_roundtrip() {
+        let oti = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+        let payload = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01, 0x02];
+        let frame = FecFrame {
+            object_id: 0xCAFEBABE,
+            oti,
+            esi: 42,
+            sym_sz: 1024,
+            payload: payload.clone(),
+        };
+
+        let encoded = frame.encode();
+        let decoded = FecFrame::decode(&encoded).expect("decode should succeed");
+
+        assert_eq!(decoded.object_id, 0xCAFEBABE);
+        assert_eq!(decoded.oti, oti);
+        assert_eq!(decoded.esi, 42);
+        assert_eq!(decoded.sym_sz, 1024);
+        assert_eq!(decoded.payload, payload);
+    }
+
+    #[test]
+    fn test_frame_too_short() {
+        assert!(FecFrame::decode(&[0u8; 21]).is_none());
+        assert!(FecFrame::decode(&[]).is_none());
+    }
+
+    #[test]
+    fn test_frame_empty_payload() {
+        let frame = FecFrame {
+            object_id: 1,
+            oti: [0u8; 12],
+            esi: 0,
+            sym_sz: 512,
+            payload: vec![],
+        };
+        let decoded = FecFrame::decode(&frame.encode()).expect("decode should succeed");
+        assert_eq!(decoded.payload, Vec::<u8>::new());
+    }
+}

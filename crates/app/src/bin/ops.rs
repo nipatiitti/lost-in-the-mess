@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use litm_common::{Delivery, Mesh, NodeId, SendPolicy, Transport};
 use litm_delivery::RaptorQDelivery;
 use litm_mesh::MeshService;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -108,10 +109,15 @@ async fn main() {
             let delivery = RaptorQDelivery::new(Arc::clone(&transport));
             let mesh = MeshService::new(Arc::clone(&transport), delivery.clone());
 
+            // Count received objects for the status logger
+            let objects_rx = Arc::new(AtomicU64::new(0));
+
             // Log received objects (delivery layer)
             let mut delivery_rx = delivery.subscribe();
+            let objects_rx_recv = Arc::clone(&objects_rx);
             tokio::spawn(async move {
                 while let Some(obj) = delivery_rx.recv().await {
+                    objects_rx_recv.fetch_add(1, Ordering::Relaxed);
                     let preview = if let Ok(text) = String::from_utf8(obj.payload.clone()) {
                         format!("\"{}\"", text)
                     } else {
@@ -124,24 +130,47 @@ async fn main() {
                 }
             });
 
-            // Log mesh neighbor table every 5 s (mesh layer)
+            // Log mesh neighbor table and topology every 5 s
             let mesh_log = Arc::clone(&mesh);
+            let objects_rx_log = Arc::clone(&objects_rx);
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
                 loop {
                     interval.tick().await;
                     let neighbors = mesh_log.neighbors();
+                    let rx_count = objects_rx_log.load(Ordering::Relaxed);
                     if neighbors.is_empty() {
-                        info!("Node {} mesh: no neighbors", id);
+                        info!("Node {} mesh: no neighbors | objects_rx={}", id, rx_count);
                     } else {
                         for n in &neighbors {
                             info!(
-                                "Node {} neighbor {} PRR={:.0}% last_seen={:.1}s",
+                                "Node {} neighbor {} PRR={:.0}% last_seen={:.1}s | objects_rx={}",
                                 id,
                                 n.id,
                                 n.prr * 100.0,
                                 n.last_seen.elapsed().as_secs_f32(),
+                                rx_count,
                             );
+                        }
+
+                        // Show two-hop topology from link-state advertisements
+                        let topo = mesh_log.topology();
+                        let direct_ids: std::collections::HashSet<NodeId> =
+                            neighbors.iter().map(|n| n.id).collect();
+                        for (via_node, links) in &topo {
+                            let two_hop: Vec<String> = links
+                                .iter()
+                                .filter(|(dst, _)| *dst != id && !direct_ids.contains(dst))
+                                .map(|(dst, prr)| format!("{}={:.0}%", dst, prr * 100.0))
+                                .collect();
+                            if !two_hop.is_empty() {
+                                info!(
+                                    "Node {} topology via {}: [{}]",
+                                    id,
+                                    via_node,
+                                    two_hop.join(", ")
+                                );
+                            }
                         }
                     }
                 }
@@ -170,22 +199,38 @@ async fn main() {
             };
 
             while let Ok((mut stream, _)) = listener.accept().await {
-                let mut buf = [0; 1024];
+                let mut buf = [0; 4096];
                 if let Ok(n) = stream.read(&mut buf).await {
                     let cmd_str = String::from_utf8_lossy(&buf[..n]);
                     if cmd_str.starts_with("send-image") {
-                        info!("Node {} sending fake image (5 KB)", id);
-                        let _ = delivery.send_object(
-                            rand::random(),
-                            vec![0xAA; 5000],
-                            SendPolicy::default(),
-                        );
+                        let path = cmd_str
+                            .strip_prefix("send-image ")
+                            .unwrap_or("")
+                            .trim()
+                            .to_string();
+                        match tokio::fs::read(&path).await {
+                            Ok(bytes) => {
+                                info!("Node {} sending image {} ({} bytes)", id, path, bytes.len());
+                                let _ = delivery.send_object(
+                                    rand::random(),
+                                    bytes,
+                                    SendPolicy::default(),
+                                );
+                            }
+                            Err(e) => {
+                                warn!("Node {} cannot read {}: {}", id, path, e);
+                            }
+                        }
                     } else if cmd_str.starts_with("send-text") {
-                        let text = cmd_str.strip_prefix("send-text ").unwrap_or("Hello Mesh!");
+                        let text = cmd_str
+                            .strip_prefix("send-text ")
+                            .unwrap_or("Hello Mesh!")
+                            .trim()
+                            .to_string();
                         info!("Node {} sending text: {}", id, text);
                         let _ = delivery.send_object(
                             rand::random(),
-                            text.as_bytes().to_vec(),
+                            text.into_bytes(),
                             SendPolicy::default(),
                         );
                     }

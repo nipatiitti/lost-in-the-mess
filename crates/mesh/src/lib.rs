@@ -3,7 +3,7 @@ use litm_common::{
 };
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -25,14 +25,19 @@ struct NeighborState {
 
 pub struct MeshService {
     neighbor_table: Arc<RwLock<HashMap<NodeId, NeighborState>>>,
+    /// link_state[node_id] = that node's own neighbor list (from its most recent beacon).
+    /// Enables building the full topology graph for Dijkstra routing.
+    link_state: Arc<RwLock<HashMap<NodeId, Vec<(NodeId, u8)>>>>,
 }
 
 impl MeshService {
     pub fn new(transport: Arc<dyn Transport>, delivery: Arc<dyn Delivery>) -> Arc<Self> {
         let neighbor_table = Arc::new(RwLock::new(HashMap::new()));
+        let link_state = Arc::new(RwLock::new(HashMap::new()));
 
         let service = Arc::new(Self {
             neighbor_table: Arc::clone(&neighbor_table),
+            link_state: Arc::clone(&link_state),
         });
 
         Self::spawn_beacon_sender(
@@ -44,13 +49,34 @@ impl MeshService {
             Arc::clone(&transport),
             Arc::clone(&delivery),
             Arc::clone(&neighbor_table),
+            Arc::clone(&link_state),
         );
-        Self::spawn_neighbor_eviction(Arc::clone(&neighbor_table));
+        Self::spawn_neighbor_eviction(
+            Arc::clone(&neighbor_table),
+            Arc::clone(&link_state),
+        );
 
         Self::spawn_flooding_task(Arc::clone(&transport), Kind::Fec);
         Self::spawn_flooding_task(Arc::clone(&transport), Kind::Control);
 
         service
+    }
+
+    /// Returns the full link-state graph as known from received beacons.
+    /// `topology()[node_id]` = list of (neighbor_id, prr) that `node_id` reported hearing.
+    pub fn topology(&self) -> HashMap<NodeId, Vec<(NodeId, f32)>> {
+        self.link_state
+            .read()
+            .unwrap()
+            .iter()
+            .map(|(src, links)| {
+                let converted = links
+                    .iter()
+                    .map(|(dst, prr_byte)| (*dst, *prr_byte as f32 / 255.0))
+                    .collect();
+                (*src, converted)
+            })
+            .collect()
     }
 
     fn spawn_beacon_sender(
@@ -104,6 +130,7 @@ impl MeshService {
         transport: Arc<dyn Transport>,
         delivery: Arc<dyn Delivery>,
         neighbor_table: Arc<RwLock<HashMap<NodeId, NeighborState>>>,
+        link_state: Arc<RwLock<HashMap<NodeId, Vec<(NodeId, u8)>>>>,
     ) {
         let local_id = transport.local_id();
         let mut rx = transport.subscribe(Kind::Beacon);
@@ -113,33 +140,42 @@ impl MeshService {
                     continue;
                 }
                 if let Ok(beacon) = postcard::from_bytes::<BeaconPayload>(&payload) {
-                    let mut table = neighbor_table.write().unwrap();
-                    let state = table.entry(meta.sender_id).or_insert(NeighborState {
-                        prr: 1.0,
-                        last_seen: Instant::now(),
-                        bitmap: beacon.decoded,
-                        expected_beacon_seq: None,
-                    });
+                    {
+                        let mut table = neighbor_table.write().unwrap();
+                        let state = table.entry(meta.sender_id).or_insert(NeighborState {
+                            prr: 1.0,
+                            last_seen: Instant::now(),
+                            bitmap: beacon.decoded,
+                            expected_beacon_seq: None,
+                        });
 
-                    state.last_seen = Instant::now();
-                    state.bitmap = beacon.decoded;
+                        state.last_seen = Instant::now();
+                        state.bitmap = beacon.decoded;
 
-                    match state.expected_beacon_seq {
-                        None => {
-                            state.prr = 1.0;
-                        }
-                        Some(expected) => {
-                            if beacon.beacon_seq >= expected {
-                                let gap = (beacon.beacon_seq - expected + 1) as f32;
-                                let inst_prr = 1.0 / gap;
-                                state.prr = (state.prr * 0.8 + inst_prr * 0.2).clamp(0.0, 1.0);
-                            } else {
-                                // Sequence reset (peer restarted) — re-initialise
+                        match state.expected_beacon_seq {
+                            None => {
                                 state.prr = 1.0;
                             }
+                            Some(expected) => {
+                                if beacon.beacon_seq >= expected {
+                                    let gap = (beacon.beacon_seq - expected + 1) as f32;
+                                    let inst_prr = 1.0 / gap;
+                                    state.prr =
+                                        (state.prr * 0.8 + inst_prr * 0.2).clamp(0.0, 1.0);
+                                } else {
+                                    // Sequence reset (peer restarted) — re-initialise
+                                    state.prr = 1.0;
+                                }
+                            }
                         }
+                        state.expected_beacon_seq = Some(beacon.beacon_seq.wrapping_add(1));
                     }
-                    state.expected_beacon_seq = Some(beacon.beacon_seq.wrapping_add(1));
+
+                    // Store this node's link-state advertisement for topology graph
+                    link_state
+                        .write()
+                        .unwrap()
+                        .insert(meta.sender_id, beacon.neighbors_heard.clone());
 
                     delivery.note_peer_coverage(meta.sender_id, beacon.decoded);
                 }
@@ -147,7 +183,10 @@ impl MeshService {
         });
     }
 
-    fn spawn_neighbor_eviction(neighbor_table: Arc<RwLock<HashMap<NodeId, NeighborState>>>) {
+    fn spawn_neighbor_eviction(
+        neighbor_table: Arc<RwLock<HashMap<NodeId, NeighborState>>>,
+        link_state: Arc<RwLock<HashMap<NodeId, Vec<(NodeId, u8)>>>>,
+    ) {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_millis(500));
             loop {
@@ -159,6 +198,13 @@ impl MeshService {
                     // trigger spurious eviction
                     now.duration_since(state.last_seen) <= Duration::from_millis(2200)
                 });
+
+                // Remove link-state entries for evicted neighbors
+                let live: HashSet<NodeId> = table.keys().copied().collect();
+                link_state
+                    .write()
+                    .unwrap()
+                    .retain(|id, _| live.contains(id));
             }
         });
     }
@@ -198,7 +244,7 @@ impl MeshService {
                 if is_new {
                     let payload_clone = payload.clone();
                     let t_transport_clone = Arc::clone(&t_transport);
-                    let hashes_clone = Arc::clone(&hashes);
+                    let hashes_clone = Arc::clone(&seen_hashes);
 
                     tokio::spawn(async move {
                         let delay = rand::thread_rng().gen_range(0..=50);
@@ -219,8 +265,6 @@ impl MeshService {
             }
         });
     }
-
-
 }
 
 impl Mesh for MeshService {
@@ -235,5 +279,77 @@ impl Mesh for MeshService {
                 bitmap: state.bitmap,
             })
             .collect()
+    }
+}
+
+/// Pure PRR calculation logic, extracted for unit testing.
+#[cfg(test)]
+fn compute_prr(current_prr: f32, expected_seq: Option<u32>, received_seq: u32) -> (f32, u32) {
+    let new_prr = match expected_seq {
+        None => 1.0,
+        Some(expected) => {
+            if received_seq >= expected {
+                let gap = (received_seq - expected + 1) as f32;
+                let inst_prr = 1.0 / gap;
+                (current_prr * 0.8 + inst_prr * 0.2).clamp(0.0, 1.0)
+            } else {
+                // Sequence reset (peer restarted)
+                1.0
+            }
+        }
+    };
+    let next_expected = received_seq.wrapping_add(1);
+    (new_prr, next_expected)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_prr_first_beacon() {
+        let (prr, next) = compute_prr(0.0, None, 0);
+        assert_eq!(prr, 1.0);
+        assert_eq!(next, 1);
+    }
+
+    #[test]
+    fn test_prr_consecutive_no_loss() {
+        // Receive seq 1 when expected 1 → gap=1 → inst_prr=1.0
+        let (prr, next) = compute_prr(1.0, Some(1), 1);
+        assert!((prr - 1.0).abs() < 1e-6, "prr={}", prr);
+        assert_eq!(next, 2);
+    }
+
+    #[test]
+    fn test_prr_gap_of_two() {
+        // Expected seq=5, received seq=6 → one packet dropped → gap=2 → inst_prr=0.5
+        let (prr, next) = compute_prr(1.0, Some(5), 6);
+        let expected_prr = 1.0f32 * 0.8 + 0.5f32 * 0.2;
+        assert!((prr - expected_prr).abs() < 1e-6, "prr={}", prr);
+        assert_eq!(next, 7);
+    }
+
+    #[test]
+    fn test_prr_sequence_reset() {
+        // Peer restarted: expected=10, received=2 → reset to 1.0
+        let (prr, next) = compute_prr(0.5, Some(10), 2);
+        assert_eq!(prr, 1.0);
+        assert_eq!(next, 3);
+    }
+
+    #[test]
+    fn test_prr_degrades_over_gaps() {
+        // Simulate losing every other beacon: seq 0, 2, 4, ...
+        let mut prr = 1.0f32;
+        let mut expected = Some(0u32);
+        for i in 0..20u32 {
+            let seq = i * 2; // skip odd sequence numbers
+            let (new_prr, next) = compute_prr(prr, expected, seq);
+            prr = new_prr;
+            expected = Some(next);
+        }
+        // Losing half the beacons should bring PRR well below 0.8
+        assert!(prr < 0.8, "prr={} should degrade with 50% loss", prr);
     }
 }

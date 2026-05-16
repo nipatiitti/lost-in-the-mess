@@ -4,7 +4,9 @@ use litm_transport::{WifiTransport, WifiTransportConfig, RadioConfig};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Run with `cargo test -- --ignored` on hardware with monitor-mode adapters.
 #[tokio::test]
+#[ignore]
 async fn test_reliable_broadcast_with_real_radio() {
     let root_key = [0u8; 32];
     
