@@ -4,14 +4,17 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "litm-app"
+path = "src/main.rs"
+
 [dependencies]
 app_sdk     = { path = "../app_sdk" }
 litm-common = { path = "../common" }
-tokio = { version = "1.37", features = ["full"] }
-clap = { version = "4.4", features = ["derive"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-rand = "0.8"
-socket2 = { version = "0.5", features = ["all"] }
-v4l = "0.14.0"
-jpeg-encoder = "0.7.0"
+tokio       = { version = "1.37", features = ["full"] }
+ratatui     = "0.29"
+crossterm   = { version = "0.28", features = ["event-stream"] }
+chrono      = { version = "0.4", default-features = false, features = ["clock"] }
+anyhow      = "1"
+futures     = "0.3"
+clap        = { version = "4.4", features = ["derive"] }
