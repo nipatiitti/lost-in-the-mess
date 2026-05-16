@@ -4,52 +4,48 @@ pub mod mock;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::sync::mpsc;
 
 use raptorq::{Decoder, Encoder, EncodingPacket, ObjectTransmissionInformation, PayloadId};
 
 use crate::frame::FecFrame;
-use transport::{PacketMeta, Transport};
-
-pub struct SendPolicy {
-    pub desired_coverage: u8,
-    pub ttl: Duration,
-    pub priority: u8,
-}
-
-pub type ObjectBitmap = [u64; 4]; // last 256 object_ids
-
-pub trait ReliableBroadcast: Send + Sync {
-    fn send_object(&self, id: u32, payload: Vec<u8>, policy: SendPolicy);
-    fn on_complete(&self, handler: Arc<dyn Fn(u32, Vec<u8>) + Send + Sync>);
-    fn decoded_bitmap(&self) -> ObjectBitmap;
-    fn note_peer_coverage(&self, peer_id: u32, bitmap: &ObjectBitmap);
-}
+use litm_common::{
+    DeliveredObject, Delivery, Kind, NodeId, ObjectBitmap, ObjectId, Result, SendPolicy, Transport,
+};
 
 pub struct RaptorQDelivery<T: Transport> {
     transport: Arc<T>,
-    on_complete_handler: Arc<Mutex<Option<Arc<dyn Fn(u32, Vec<u8>) + Send + Sync>>>>,
-    decoders: Arc<Mutex<HashMap<u32, Decoder>>>,
-    completed_objects: Arc<Mutex<Vec<u32>>>,
+    subscribers: Arc<Mutex<Vec<mpsc::Sender<DeliveredObject>>>>,
+    decoders: Arc<Mutex<HashMap<ObjectId, Decoder>>>,
+    completed_objects: Arc<Mutex<Vec<ObjectId>>>,
+    peer_coverage: Arc<Mutex<HashMap<NodeId, ObjectBitmap>>>,
+    local_bitmap: Arc<Mutex<ObjectBitmap>>,
 }
 
 impl<T: Transport + 'static> RaptorQDelivery<T> {
     pub fn new(transport: Arc<T>) -> Arc<Self> {
         let delivery = Arc::new(Self {
             transport: transport.clone(),
-            on_complete_handler: Arc::new(Mutex::new(None)),
+            subscribers: Arc::new(Mutex::new(Vec::new())),
             decoders: Arc::new(Mutex::new(HashMap::new())),
             completed_objects: Arc::new(Mutex::new(Vec::new())),
+            peer_coverage: Arc::new(Mutex::new(HashMap::new())),
+            local_bitmap: Arc::new(Mutex::new(ObjectBitmap::default())),
         });
 
+        let mut rx = transport.subscribe(Kind::Fec);
         let delivery_clone = delivery.clone();
-        transport.subscribe(Arc::new(move |_meta, payload| {
-            delivery_clone.handle_packet(payload);
-        }));
+        
+        tokio::spawn(async move {
+            while let Some((meta, payload)) = rx.recv().await {
+                delivery_clone.handle_packet(meta.sender_id, &payload).await;
+            }
+        });
 
         delivery
     }
 
-    fn handle_packet(&self, payload: &[u8]) {
+    async fn handle_packet(&self, source: NodeId, payload: &[u8]) {
         if let Some(frame) = FecFrame::decode(payload) {
             let mut completed = self.completed_objects.lock().unwrap();
             if completed.contains(&frame.object_id) {
@@ -58,8 +54,11 @@ impl<T: Transport + 'static> RaptorQDelivery<T> {
 
             let mut decoders = self.decoders.lock().unwrap();
             let decoder = decoders.entry(frame.object_id).or_insert_with(|| {
+                let mut tl_bytes = [0u8; 8];
+                tl_bytes.copy_from_slice(&frame.oti[0..8]);
+                let transfer_length = u64::from_be_bytes(tl_bytes);
                 Decoder::new(ObjectTransmissionInformation::with_defaults(
-                    frame.oti as u64,
+                    transfer_length,
                     frame.sym_sz,
                 ))
             });
@@ -69,60 +68,80 @@ impl<T: Transport + 'static> RaptorQDelivery<T> {
 
             if let Some(decoded_payload) = decoder.decode(packet) {
                 completed.push(frame.object_id);
-                if let Some(handler) = self.on_complete_handler.lock().unwrap().as_ref() {
-                    handler(frame.object_id, decoded_payload);
-                }
+                self.local_bitmap.lock().unwrap().set(frame.object_id);
+                
+                let mut subscribers = self.subscribers.lock().unwrap();
+                subscribers.retain(|tx| {
+                    tx.try_send(DeliveredObject {
+                        id: frame.object_id,
+                        source,
+                        payload: decoded_payload.clone(),
+                    })
+                    .is_ok()
+                });
             }
         }
     }
 }
 
-impl<T: Transport + 'static> ReliableBroadcast for RaptorQDelivery<T> {
-    fn send_object(&self, id: u32, payload: Vec<u8>, _policy: SendPolicy) {
+impl<T: Transport + 'static> Delivery for RaptorQDelivery<T> {
+    fn send_object(&self, id: ObjectId, payload: Vec<u8>, policy: SendPolicy) -> Result<()> {
         let transport = self.transport.clone();
         let payload_len = payload.len() as u64;
+        let peer_coverage = self.peer_coverage.clone();
 
-        // Spawn a thread to send the object
-        std::thread::spawn(move || {
+        tokio::spawn(async move {
             let symbol_size = 1024;
             let encoder = Encoder::with_defaults(&payload, symbol_size);
-            let oti = encoder.get_config().transfer_length();
+            
+            let k = (payload_len as f64 / symbol_size as f64).ceil() as u32;
+            let target_symbols = (((k + 4) as f64 * 1.2) / 0.8).ceil() as u32;
 
-            // For a basic MVP, we just send all source symbols and some repair symbols.
-            let symbols_count = (payload_len as f64 / symbol_size as f64).ceil() as u32;
-            let target_symbols = (symbols_count as f64 * 1.5).ceil() as u32; // 50% overhead for 20% drop
+            let packets = encoder.get_encoded_packets(target_symbols);
 
-            let repair_symbols = target_symbols.saturating_sub(symbols_count);
-            let packets = encoder.get_encoded_packets(repair_symbols);
-
+            let mut oti = [0u8; 12];
+            oti[0..8].copy_from_slice(&payload_len.to_be_bytes());
+            
             for packet in packets {
+                let coverage_count = {
+                    let coverage = peer_coverage.lock().unwrap();
+                    coverage.values().filter(|b| b.contains(id)).count()
+                };
+                
+                if coverage_count >= policy.desired_coverage as usize {
+                    break;
+                }
+
                 let esi = packet.payload_id().encoding_symbol_id();
                 let frame = FecFrame {
                     object_id: id,
-                    oti: payload_len,
+                    oti,
                     esi,
                     sym_sz: symbol_size,
                     payload: packet.data().to_vec(),
                 };
 
                 let encoded_frame = frame.encode();
-                let _ = transport.broadcast(&encoded_frame);
+                let _ = transport.broadcast(Kind::Fec, &encoded_frame);
 
-                // Add a small delay to simulate network pacing and prevent flooding
-                std::thread::sleep(std::time::Duration::from_millis(5));
+                tokio::time::sleep(Duration::from_millis(5)).await;
             }
         });
+
+        Ok(())
     }
 
-    fn on_complete(&self, handler: Arc<dyn Fn(u32, Vec<u8>) + Send + Sync>) {
-        *self.on_complete_handler.lock().unwrap() = Some(handler);
+    fn subscribe(&self) -> mpsc::Receiver<DeliveredObject> {
+        let (tx, rx) = mpsc::channel(100);
+        self.subscribers.lock().unwrap().push(tx);
+        rx
     }
 
     fn decoded_bitmap(&self) -> ObjectBitmap {
-        [0; 4] // Mock implementation
+        *self.local_bitmap.lock().unwrap()
     }
 
-    fn note_peer_coverage(&self, _peer_id: u32, _bitmap: &ObjectBitmap) {
-        // Mock implementation
+    fn note_peer_coverage(&self, peer: NodeId, bitmap: ObjectBitmap) {
+        self.peer_coverage.lock().unwrap().insert(peer, bitmap);
     }
 }

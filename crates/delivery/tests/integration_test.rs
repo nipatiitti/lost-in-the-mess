@@ -1,11 +1,11 @@
-use std::sync::{Arc, Mutex};
+use litm_common::{Delivery, SendPolicy};
+use litm_delivery::RaptorQDelivery;
+use litm_delivery::mock::MockNetwork;
+use std::sync::Arc;
 use std::time::Duration;
 
-use delivery::{RaptorQDelivery, ReliableBroadcast, SendPolicy};
-use delivery::mock::MockNetwork;
-
-#[test]
-fn test_reliable_broadcast_with_drop() {
+#[tokio::test]
+async fn test_reliable_broadcast_with_drop() {
     let network = MockNetwork::new(0.2); // 20% drop rate
 
     let sender_transport = Arc::new(network.create_transport(1));
@@ -14,13 +14,7 @@ fn test_reliable_broadcast_with_drop() {
     let sender = RaptorQDelivery::new(sender_transport);
     let receiver = RaptorQDelivery::new(receiver_transport);
 
-    let received_payload = Arc::new(Mutex::new(None));
-    let received_clone = received_payload.clone();
-
-    receiver.on_complete(Arc::new(move |id, payload| {
-        assert_eq!(id, 42);
-        *received_clone.lock().unwrap() = Some(payload);
-    }));
+    let mut rx = receiver.subscribe();
 
     // Generate 100KB payload
     let mut payload = vec![0u8; 100_000];
@@ -34,16 +28,14 @@ fn test_reliable_broadcast_with_drop() {
         priority: 1,
     };
 
-    sender.send_object(42, payload.clone(), policy);
+    sender.send_object(42, payload.clone(), policy).unwrap();
 
     // Wait for the receiver to get the message
-    for _ in 0..50 {
-        std::thread::sleep(Duration::from_millis(100));
-        if received_payload.lock().unwrap().is_some() {
-            break;
-        }
-    }
+    let result = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("Test timed out waiting for payload")
+        .expect("Channel closed");
 
-    let result = received_payload.lock().unwrap().take().expect("Failed to receive and decode payload");
-    assert_eq!(result, payload);
+    assert_eq!(result.id, 42);
+    assert_eq!(result.payload, payload);
 }
