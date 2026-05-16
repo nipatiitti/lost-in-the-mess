@@ -233,7 +233,13 @@
 <div class="shell">
   <Sidebar {screen} {setScreen} {nodes} />
   
-  <StatusBar time={timeStr} {lastEvent} onSend={() => screen = "uplink"} nodesCount={nodes.length} />
+  <StatusBar 
+    time={timeStr} 
+    {lastEvent} 
+    onSend={() => screen = "uplink"} 
+    nodesCount={nodes.length} 
+    {connected} 
+  />
   
   <div class="shell-main">
     <div style="flex:1;min-height:0;display:flex;position:relative;flex-direction:column">

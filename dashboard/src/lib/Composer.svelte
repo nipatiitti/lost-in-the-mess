@@ -155,7 +155,6 @@
       <button class="btn btn-primary" on:click={handleSend}>
         <Send size={14} /><span>SEND →</span>
       </button>
-      <button class="btn btn-secondary">SCHEDULE</button>
       {#if lastResult}
         <div class="mono" style="font-size:11px;color: {lastResult.result === 'OK' ? 'var(--signal-300)' : lastResult.result === 'RELAY' ? 'var(--uplink-300)' : 'var(--lost-300)'}">
           ▸ {lastResult.message}

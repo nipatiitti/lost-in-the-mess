@@ -19,7 +19,7 @@
 
 <div class="shell-side">
   <!-- Brand -->
-  <div style="padding:18px 16px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px">
+  <div style="height:var(--header-h);padding:0 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px">
     <svg width="22" height="22" viewBox="0 0 96 96">
       <circle cx="48" cy="48" r="20" fill="none" stroke="#6DF7B5" stroke-dasharray="2 3" opacity="0.6"/>
       <circle cx="48" cy="48" r="12" fill="none" stroke="#6DF7B5"/>
