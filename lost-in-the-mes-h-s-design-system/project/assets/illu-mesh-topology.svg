@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" fill="none">
+  
+  <defs>
+    <radialGradient id="halo" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#6DF7B5" stop-opacity="0.18"></stop>
+      <stop offset="100%" stop-color="#6DF7B5" stop-opacity="0"></stop>
+    </radialGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0 L0 0 0 32" fill="none" stroke="rgba(109,247,181,0.06)" stroke-width="1"></path>
+    </pattern>
+  </defs>
+
+  <rect width="800" height="480" fill="#070B12"></rect>
+  <rect width="800" height="480" fill="url(#grid)"></rect>
+
+  
+  <circle cx="400" cy="240" r="240" fill="url(#halo)"></circle>
+
+  
+  <g stroke-linecap="round">
+    
+    <line x1="400" y1="240" x2="220" y2="120" stroke="#6DF7B5" stroke-width="1.2" opacity="0.85"></line>
+    <line x1="400" y1="240" x2="600" y2="120" stroke="#6DF7B5" stroke-width="1.2" opacity="0.85"></line>
+    <line x1="400" y1="240" x2="160" y2="320" stroke="#6DF7B5" stroke-width="1.2" opacity="0.85"></line>
+    <line x1="400" y1="240" x2="660" y2="320" stroke="#6DF7B5" stroke-width="1.2" opacity="0.85"></line>
+    <line x1="400" y1="240" x2="400" y2="80" stroke="#6DF7B5" stroke-width="1.2" opacity="0.85"></line>
+    <line x1="400" y1="240" x2="380" y2="400" stroke="#6DF7B5" stroke-width="1.2" opacity="0.85"></line>
+
+    
+    <line x1="220" y1="120" x2="100" y2="220" stroke="#FFB347" stroke-width="1" opacity="0.7" stroke-dasharray="4 3"></line>
+    <line x1="600" y1="120" x2="720" y2="220" stroke="#FFB347" stroke-width="1" opacity="0.7" stroke-dasharray="4 3"></line>
+    <line x1="660" y1="320" x2="720" y2="220" stroke="#FFB347" stroke-width="1" opacity="0.7" stroke-dasharray="4 3"></line>
+    <line x1="160" y1="320" x2="100" y2="220" stroke="#FFB347" stroke-width="1" opacity="0.7" stroke-dasharray="4 3"></line>
+    <line x1="380" y1="400" x2="180" y2="420" stroke="#FFB347" stroke-width="1" opacity="0.6" stroke-dasharray="4 3"></line>
+    <line x1="380" y1="400" x2="620" y2="420" stroke="#FFB347" stroke-width="1" opacity="0.6" stroke-dasharray="4 3"></line>
+
+    
+    <line x1="100" y1="220" x2="60" y2="100" stroke="#FF4A8B" stroke-width="1" opacity="0.6" stroke-dasharray="2 4"></line>
+    <line x1="720" y1="220" x2="760" y2="100" stroke="#FF4A8B" stroke-width="1" opacity="0.6" stroke-dasharray="2 4"></line>
+    <line x1="180" y1="420" x2="60" y2="100" stroke="#FF4A8B" stroke-width="1" opacity="0.3" stroke-dasharray="2 4"></line>
+    <line x1="620" y1="420" x2="760" y2="100" stroke="#FF4A8B" stroke-width="1" opacity="0.3" stroke-dasharray="2 4"></line>
+  </g>
+
+  
+  <g font-family="JetBrains Mono, monospace" font-size="10" fill="#6DF7B5" letter-spacing="0.14em">
+    
+    <circle cx="400" cy="240" r="10" fill="#070B12" stroke="#6DF7B5" stroke-width="1.5"></circle>
+    <circle cx="400" cy="240" r="4" fill="#6DF7B5"></circle>
+    <text x="412" y="244">HUB</text>
+
+    
+    <g fill="#6DF7B5">
+      <circle cx="220" cy="120" r="4"></circle>
+      <circle cx="600" cy="120" r="4"></circle>
+      <circle cx="160" cy="320" r="4"></circle>
+      <circle cx="660" cy="320" r="4"></circle>
+      <circle cx="400" cy="80" r="4"></circle>
+      <circle cx="380" cy="400" r="4"></circle>
+    </g>
+    <text x="230" y="116">N-04</text>
+    <text x="610" y="116">N-07</text>
+    <text x="170" y="316">N-09</text>
+    <text x="670" y="316">N-11</text>
+    <text x="410" y="76">N-02</text>
+    <text x="390" y="396">N-13</text>
+
+    
+    <g fill="#FFB347">
+      <circle cx="100" cy="220" r="3.5"></circle>
+      <circle cx="720" cy="220" r="3.5"></circle>
+      <circle cx="180" cy="420" r="3.5"></circle>
+      <circle cx="620" cy="420" r="3.5"></circle>
+    </g>
+
+    
+    <g fill="#FF4A8B">
+      <circle cx="60" cy="100" r="3"></circle>
+      <circle cx="760" cy="100" r="3"></circle>
+    </g>
+  </g>
+
+  
+  <g stroke="#F4F7F2" stroke-width="1" opacity="0.6">
+    <path d="M16 16 L16 36 M16 16 L36 16"></path>
+    <path d="M784 16 L784 36 M784 16 L764 16"></path>
+    <path d="M16 464 L16 444 M16 464 L36 464"></path>
+    <path d="M784 464 L784 444 M784 464 L764 464"></path>
+  </g>
+
+  
+  <text x="22" y="476" font-family="JetBrains Mono, monospace" font-size="9" fill="#6B7670" letter-spacing="0.22em">MESH.TOPO / N=14 / PRR.AVG 0.87</text>
+  <text x="630" y="476" font-family="JetBrains Mono, monospace" font-size="9" fill="#6B7670" letter-spacing="0.22em">UTC 22:14:07</text>
+</svg>

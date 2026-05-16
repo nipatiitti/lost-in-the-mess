@@ -1,0 +1,39 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="_card.css"></head><body>
+<div class="eyebrow">Colors / PRR scale — link quality</div>
+<div style="position:relative">
+  <div style="height:32px;border-radius:2px;background:linear-gradient(to right,#FF4A8B 0%,#FF4A8B 24%,#FFB347 26%,#FFB347 60%,#E8D55C 62%,#E8D55C 74%,#6DF7B5 76%,#6DF7B5 100%);"></div>
+  <div style="display:flex;justify-content:space-between;margin-top:6px;font-family:var(--font-mono);font-size:10px;letter-spacing:0.14em;color:var(--bone-300)">
+    <span>0.00</span><span>0.25</span><span>0.50</span><span>0.75</span><span>1.00</span>
+  </div>
+</div>
+<div style="margin-top:14px;display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+  <div style="border:1px solid var(--border);background:var(--ink-100);padding:10px;border-radius:2px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+      <span style="width:8px;height:8px;border-radius:50%;background:#FF4A8B;box-shadow:0 0 8px #FF4A8B"></span>
+      <span class="stamp" style="font-size:9px;color:#FF4A8B">LOST</span>
+    </div>
+    <div class="mono" style="font-size:11px;color:var(--bone-300)">PRR &lt; 0.25</div>
+  </div>
+  <div style="border:1px solid var(--border);background:var(--ink-100);padding:10px;border-radius:2px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+      <span style="width:8px;height:8px;border-radius:50%;background:#FFB347;box-shadow:0 0 8px #FFB347"></span>
+      <span class="stamp" style="font-size:9px;color:#FFB347">DEGRADED</span>
+    </div>
+    <div class="mono" style="font-size:11px;color:var(--bone-300)">0.25 – 0.60</div>
+  </div>
+  <div style="border:1px solid var(--border);background:var(--ink-100);padding:10px;border-radius:2px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+      <span style="width:8px;height:8px;border-radius:50%;background:#E8D55C;box-shadow:0 0 8px #E8D55C"></span>
+      <span class="stamp" style="font-size:9px;color:#E8D55C">WATCH</span>
+    </div>
+    <div class="mono" style="font-size:11px;color:var(--bone-300)">0.60 – 0.75</div>
+  </div>
+  <div style="border:1px solid var(--border);background:var(--ink-100);padding:10px;border-radius:2px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+      <span style="width:8px;height:8px;border-radius:50%;background:#6DF7B5;box-shadow:0 0 8px #6DF7B5"></span>
+      <span class="stamp" style="font-size:9px;color:#6DF7B5">NOMINAL</span>
+    </div>
+    <div class="mono" style="font-size:11px;color:var(--bone-300)">≥ 0.75</div>
+  </div>
+</div>
+</body></html>
