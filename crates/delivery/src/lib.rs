@@ -62,7 +62,7 @@ impl<T: Transport + 'static + ?Sized> RaptorQDelivery<T> {
                 ))
             });
 
-            let payload_id = PayloadId::new(0, frame.esi);
+            let payload_id = PayloadId::new(frame.block, frame.esi);
             let packet = EncodingPacket::new(payload_id, frame.payload);
 
             if let Some(decoded_payload) = decoder.decode(packet) {
@@ -90,7 +90,7 @@ impl<T: Transport + 'static + ?Sized> Delivery for RaptorQDelivery<T> {
         let peer_coverage = self.peer_coverage.clone();
 
         tokio::spawn(async move {
-            let symbol_size = 1024;
+            let symbol_size = 1374;
             let encoder = Encoder::with_defaults(&payload, symbol_size);
 
             let k = (payload_len as f64 / symbol_size as f64).ceil() as u32;
@@ -111,9 +111,11 @@ impl<T: Transport + 'static + ?Sized> Delivery for RaptorQDelivery<T> {
                     break;
                 }
 
+                let block = packet.payload_id().source_block_number();
                 let esi = packet.payload_id().encoding_symbol_id();
                 let frame = FecFrame {
                     object_id: id,
+                    block,
                     oti,
                     esi,
                     sym_sz: symbol_size,

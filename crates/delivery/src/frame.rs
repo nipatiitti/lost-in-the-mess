@@ -1,5 +1,6 @@
 pub struct FecFrame {
     pub object_id: u32,
+    pub block: u8,
     pub oti: [u8; 12],
     pub esi: u32,
     pub sym_sz: u16,
@@ -8,8 +9,9 @@ pub struct FecFrame {
 
 impl FecFrame {
     pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(22 + self.payload.len());
+        let mut buf = Vec::with_capacity(23 + self.payload.len());
         buf.extend_from_slice(&self.object_id.to_be_bytes());
+        buf.push(self.block);
         buf.extend_from_slice(&self.oti);
         buf.extend_from_slice(&self.esi.to_be_bytes());
         buf.extend_from_slice(&self.sym_sz.to_be_bytes());
@@ -18,18 +20,20 @@ impl FecFrame {
     }
 
     pub fn decode(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() < 22 {
+        if bytes.len() < 23 {
             return None;
         }
         let object_id = u32::from_be_bytes(bytes[0..4].try_into().unwrap());
+        let block = bytes[4];
         let mut oti = [0u8; 12];
-        oti.copy_from_slice(&bytes[4..16]);
-        let esi = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
-        let sym_sz = u16::from_be_bytes(bytes[20..22].try_into().unwrap());
-        let payload = bytes[22..].to_vec();
+        oti.copy_from_slice(&bytes[5..17]);
+        let esi = u32::from_be_bytes(bytes[17..21].try_into().unwrap());
+        let sym_sz = u16::from_be_bytes(bytes[21..23].try_into().unwrap());
+        let payload = bytes[23..].to_vec();
 
         Some(FecFrame {
             object_id,
+            block,
             oti,
             esi,
             sym_sz,
@@ -48,6 +52,7 @@ mod tests {
         let payload = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01, 0x02];
         let frame = FecFrame {
             object_id: 0xCAFEBABE,
+            block: 1,
             oti,
             esi: 42,
             sym_sz: 1024,
@@ -58,6 +63,7 @@ mod tests {
         let decoded = FecFrame::decode(&encoded).expect("decode should succeed");
 
         assert_eq!(decoded.object_id, 0xCAFEBABE);
+        assert_eq!(decoded.block, 1);
         assert_eq!(decoded.oti, oti);
         assert_eq!(decoded.esi, 42);
         assert_eq!(decoded.sym_sz, 1024);
@@ -66,7 +72,7 @@ mod tests {
 
     #[test]
     fn test_frame_too_short() {
-        assert!(FecFrame::decode(&[0u8; 21]).is_none());
+        assert!(FecFrame::decode(&[0u8; 22]).is_none());
         assert!(FecFrame::decode(&[]).is_none());
     }
 
@@ -74,6 +80,7 @@ mod tests {
     fn test_frame_empty_payload() {
         let frame = FecFrame {
             object_id: 1,
+            block: 0,
             oti: [0u8; 12],
             esi: 0,
             sym_sz: 512,
