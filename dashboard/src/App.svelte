@@ -61,6 +61,8 @@
   }
 
   $: nodes = (() => {
+    if (!connected) return [];
+    
     const hubId = "HUB";
     const result = [];
     const nodeMap = new Map();
@@ -172,6 +174,7 @@
 
   $: meshLinks = (() => {
     let l = [];
+    if (!connected) return l;
     if (data.neighbors) {
        data.neighbors.forEach(n => {
           l.push({ source: "HUB", target: `N-${n.id.toString().padStart(2, '0')}`, prr: n.prr });
