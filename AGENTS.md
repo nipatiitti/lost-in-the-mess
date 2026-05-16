@@ -108,7 +108,7 @@ Concretely:
 - **Counter-suppressed forwarding.** When a node hears a new message ID,
   it schedules a rebroadcast after a small jittered delay, counts
   overheard rebroadcasts during that delay, and cancels if `count ≥ K`
-  (start with K=2). Dense regions self-quiet, sparse regions self-forward.
+  (K=1 for our scale, configurable to plot suppression behaviour). Dense regions self-quiet, sparse regions self-forward.
 - **Beacon-of-everything.** One periodic encrypted beacon per node carries
   epoch, neighbor list with link qualities, and a bitmap of recently-
   decoded object IDs. Since one TX reaches all neighbors for free, we
@@ -181,7 +181,26 @@ mutex on handler lists.
 The packet kind (Beacon / Fec / Control) is the first byte of the
 _plaintext_ fed to ChaCha20-Poly1305. A passive eavesdropper cannot
 distinguish beacons from data frames — this matters for low-probability-
-of-detection (LPI/LPD). The cost is one byte per packet.
+of-detection (LPI/LPD). To maintain this claim, short frames like beacons
+are length-padded to a standard size (~1500 B) so they cannot be distinguished
+from FEC frames.
+
+### 8. Active jamming defense in mesh
+
+Active jamming defense lives in the `mesh` layer, not `app`.
+Per-channel PRR and noise-floor estimates are maintained from beacons
+and FEC traffic. On PRR collapse, a node emits `Kind::Control::ChannelSwitch { next, at_epoch }`.
+Coordinated hopping executes exactly at a named epoch boundary, not immediately.
+The failure detector must distinguish a jammed link from a dead peer —
+do not evict neighbors solely on PRR collapse.
+
+### 9. Mini-beacon piggyback on FEC frames
+
+We prepend 6 bytes to every `Kind::Fec` plaintext:
+`sender_id (4) || epoch_lsb (1) || bitmap_head (1)`.
+This decouples coverage feedback from the 500 ms beacon interval.
+Beacons remain authoritative, but mini-beacons keep coverage tracking
+fresh at the rate of FEC traffic.
 
 ## The shared contract
 
@@ -195,7 +214,7 @@ deliberately small:
   no per-crate error types.
 - **`Kind`:** `Beacon | Fec | Control`.
 - **`PacketMeta`:** sender_id, rssi_dbm, recv_time.
-- **`ObjectBitmap`:** 256-bit ring of recently-decoded object IDs.
+- **`ObjectBitmap`:** 256-bit ring of recently-decoded objects, indexing via a hash of `(source_node, object_id)` to avoid collisions.
 - **`SendPolicy`:** desired_coverage, ttl, priority.
 - **`DeliveredObject`:** id, source, payload.
 - **`NeighborInfo`:** id, prr, last_seen, bitmap.
@@ -210,6 +229,12 @@ Trait dependencies:
 Each crate is independently testable by mocking the layer below.
 
 ## Wire formats
+
+### Link quality (PRR)
+
+PRR (Packet Reception Ratio) is load-bearing. It is computed per neighbor as follows:
+`PRR = (bitmap delta across consecutive beacons of that neighbor) / (symbols we transmitted in that window)`.
+This is maintained by the `mesh` layer.
 
 ### Transport envelope (owned by `transport`)
 
@@ -238,7 +263,9 @@ Each crate is independently testable by mocking the layer below.
 - Old `K_e` is **zeroized immediately** — forward secrecy holds even if
   the device is captured later.
 - Each node keeps a sliding window of 3 epoch keys (`e-1, e, e+1`) to
-  tolerate clock skew and packet reorder.
+  tolerate clock skew and packet reorder. If a node is out of sync, it reads
+  the plaintext epoch, recomputes keys up to that epoch, and then attempts
+  AEAD verification to resync.
 - Per-sender replay: 128-bit sliding bitmap below `highest_counter_seen`.
 - Post-compromise security: triggered via `Kind::Control` rekey message,
   with the new root distributed pairwise over Noise IK to surviving peers.
@@ -246,18 +273,22 @@ Each crate is independently testable by mocking the layer below.
 ### FEC frame (owned by `delivery`, plaintext when `Kind::Fec`)
 
 ```
-+----------+--------+--------+--------+-----------------------+
-| object_id| oti    | esi    | sym_sz | symbol_bytes (≈1400B) |
-|   u32    |  12B   |  u32   |  u16   |                       |
-+----------+--------+--------+--------+-----------------------+
++----------+--------+--------+--------+--------+-----------------------+
+| object_id| block  | oti    | esi    | sym_sz | symbol_bytes (≈1400B) |
+|   u32    |  u8    |  12B   |  u32   |  u16   |                       |
++----------+--------+--------+--------+--------+-----------------------+
 ```
 
+- `block` is `block_id: u8` so late joiners can identify which block of which object this pertains to beyond OTI.
 - `oti` is `raptorq::ObjectTransmissionInformation` serialized —
   included in every symbol so receivers can join a stream mid-flight.
 - Symbol size T tuned so the total post-envelope frame is ≤ 1500B.
 - K (source symbols per block) chosen per object based on payload size.
 - Adaptive rate:
-  `target_symbols = ceil((K + 4) * 1.2 / observed_prr)`.
+  `K_overhead = K + raptorq_margin(K)`
+  `target_symbols = ceil(K_overhead / max(observed_prr, 0.05))`
+  The PRR floor prevents blowup on dead links.
+- Encoder eviction policy: Per-object timeout and globally capped number of in-flight objects.
 
 ### Beacon payload (owned by `mesh`, plaintext when `Kind::Beacon`)
 
