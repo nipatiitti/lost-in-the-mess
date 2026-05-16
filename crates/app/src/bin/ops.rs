@@ -29,7 +29,7 @@ enum Commands {
         iface: String,
     },
     Node {
-        #[arg(short, long)]
+        #[arg(long)]
         id: NodeId,
         #[arg(short = 'p', long, default_value = "litm")]
         password: String,
@@ -56,16 +56,23 @@ async fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Launcher { nodes, password, iface } => {
+        Commands::Launcher {
+            nodes,
+            password,
+            iface,
+        } => {
             info!("Launching {} nodes on interface {}", nodes, iface);
             let mut children = Vec::new();
             for i in 1..=nodes {
                 let id = i as NodeId;
                 let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
                 cmd.arg("node")
-                    .arg("--id").arg(id.to_string())
-                    .arg("--password").arg(&password)
-                    .arg("--iface").arg(&iface);
+                    .arg("--id")
+                    .arg(id.to_string())
+                    .arg("--password")
+                    .arg(&password)
+                    .arg("--iface")
+                    .arg(&iface);
                 let child = cmd.spawn().expect("failed to spawn node");
                 children.push(child);
             }
@@ -82,7 +89,11 @@ async fn main() {
             }
         }
 
-        Commands::Node { id, password, iface } => {
+        Commands::Node {
+            id,
+            password,
+            iface,
+        } => {
             info!("Starting Node {} on interface {}", id, iface);
 
             let transport: Arc<dyn Transport> = {
@@ -109,7 +120,10 @@ async fn main() {
                     } else {
                         format!("{} bytes (binary)", obj.payload.len())
                     };
-                    info!("Node {} received object {} from {}: {}", id, obj.id, obj.source, preview);
+                    info!(
+                        "Node {} received object {} from {}: {}",
+                        id, obj.id, obj.source, preview
+                    );
                 }
             });
 
@@ -184,7 +198,9 @@ async fn main() {
 
         Commands::SendImage { id, path } => {
             if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{}", 10000 + id)).await {
-                let _ = stream.write_all(format!("send-image {}", path).as_bytes()).await;
+                let _ = stream
+                    .write_all(format!("send-image {}", path).as_bytes())
+                    .await;
                 info!("Triggered send-image on node {}", id);
             } else {
                 warn!("Failed to connect to node {}", id);
@@ -193,7 +209,9 @@ async fn main() {
 
         Commands::SendText { id, message } => {
             if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{}", 10000 + id)).await {
-                let _ = stream.write_all(format!("send-text {}", message).as_bytes()).await;
+                let _ = stream
+                    .write_all(format!("send-text {}", message).as_bytes())
+                    .await;
                 info!("Triggered send-text on node {}", id);
             } else {
                 warn!("Failed to connect to node {}", id);
