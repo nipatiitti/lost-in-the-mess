@@ -130,47 +130,68 @@ async fn main() {
                 }
             });
 
-            // Log mesh neighbor table and topology every 5 s
+            // Log mesh status every 5 s; log neighbor changes immediately.
             let mesh_log = Arc::clone(&mesh);
             let objects_rx_log = Arc::clone(&objects_rx);
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+                let mut known_neighbors: std::collections::HashSet<NodeId> =
+                    std::collections::HashSet::new();
                 loop {
                     interval.tick().await;
-                    let neighbors = mesh_log.neighbors();
+                    let mut neighbors = mesh_log.neighbors();
+                    neighbors.sort_by_key(|n| n.id);
                     let rx_count = objects_rx_log.load(Ordering::Relaxed);
-                    if neighbors.is_empty() {
-                        info!("Node {} mesh: no neighbors | objects_rx={}", id, rx_count);
-                    } else {
-                        for n in &neighbors {
-                            info!(
-                                "Node {} neighbor {} PRR={:.0}% last_seen={:.1}s | objects_rx={}",
-                                id,
-                                n.id,
-                                n.prr * 100.0,
-                                n.last_seen.elapsed().as_secs_f32(),
-                                rx_count,
-                            );
-                        }
 
-                        // Show two-hop topology from link-state advertisements
-                        let topo = mesh_log.topology();
-                        let direct_ids: std::collections::HashSet<NodeId> =
-                            neighbors.iter().map(|n| n.id).collect();
-                        for (via_node, links) in &topo {
-                            let two_hop: Vec<String> = links
-                                .iter()
-                                .filter(|(dst, _)| *dst != id && !direct_ids.contains(dst))
-                                .map(|(dst, prr)| format!("{}={:.0}%", dst, prr * 100.0))
-                                .collect();
-                            if !two_hop.is_empty() {
-                                info!(
-                                    "Node {} topology via {}: [{}]",
-                                    id,
-                                    via_node,
-                                    two_hop.join(", ")
-                                );
-                            }
+                    let current_ids: std::collections::HashSet<NodeId> =
+                        neighbors.iter().map(|n| n.id).collect();
+
+                    for &appeared in current_ids.difference(&known_neighbors) {
+                        info!("▲ node {id} peer {appeared} UP");
+                    }
+                    for &lost in known_neighbors.difference(&current_ids) {
+                        info!("▼ node {id} peer {lost} DOWN");
+                    }
+                    known_neighbors = current_ids;
+
+                    let topo = mesh_log.topology();
+                    let direct_ids: std::collections::HashSet<NodeId> =
+                        neighbors.iter().map(|n| n.id).collect();
+
+                    info!(
+                        "node {id} | {} neighbor(s) | rx={rx_count}",
+                        neighbors.len()
+                    );
+                    for (i, n) in neighbors.iter().enumerate() {
+                        let branch = if i + 1 == neighbors.len() { "└" } else { "├" };
+                        let two_hop: Vec<String> = topo
+                            .get(&n.id)
+                            .map(|links| {
+                                links
+                                    .iter()
+                                    .filter(|(dst, _)| *dst != id && !direct_ids.contains(dst))
+                                    .map(|(dst, prr)| format!("{dst}@{:.0}%", prr * 100.0))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+
+                        if two_hop.is_empty() {
+                            info!(
+                                "  {branch} peer {peer}  prr={prr:.0}%  rssi={rssi}dBm  seen={seen:.1}s",
+                                peer = n.id,
+                                prr  = n.prr * 100.0,
+                                rssi = n.rssi_dbm,
+                                seen = n.last_seen.elapsed().as_secs_f32(),
+                            );
+                        } else {
+                            info!(
+                                "  {branch} peer {peer}  prr={prr:.0}%  rssi={rssi}dBm  seen={seen:.1}s  2-hop:[{hops}]",
+                                peer = n.id,
+                                prr  = n.prr * 100.0,
+                                rssi = n.rssi_dbm,
+                                seen = n.last_seen.elapsed().as_secs_f32(),
+                                hops = two_hop.join(" "),
+                            );
                         }
                     }
                 }

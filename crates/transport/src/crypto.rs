@@ -1,5 +1,6 @@
-//! ChaCha20-Poly1305 AEAD with a 3-key sliding window ratcheted by HKDF-SHA256.
-//! The window holds {e-1, e, e+1} so peers ±60s of clock skew can still talk.
+//! ChaCha20-Poly1305 AEAD with a sliding window ratcheted by HKDF-SHA256.
+//! The window holds {e-BACK, …, e, e+1} so peers with clock skew up to
+//! EPOCH_BACK_TOLERANCE*60 seconds behind can still communicate.
 
 use chacha20poly1305::{
     ChaCha20Poly1305, Key, Nonce,
@@ -12,8 +13,15 @@ use std::sync::Mutex;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use litm_common::{Epoch, Error, Result};
+use tracing::{debug, warn};
+
 
 const RATCHET_INFO: &[u8] = b"kova-mesh/ratchet/v1";
+
+// How many epochs behind the current epoch we keep keys for.
+// Each epoch is 60 s, so 2 means nodes whose clocks lag by up to 120 s can
+// still decrypt frames from a faster peer.
+const EPOCH_BACK_TOLERANCE: u32 = 2;
 
 #[derive(Zeroize, ZeroizeOnDrop)]
 struct EpochKey([u8; 32]);
@@ -43,13 +51,16 @@ fn epoch_key(root: &[u8; 32], epoch: Epoch) -> [u8; 32] {
 
 impl KeyStore {
     /// Initialize from a 32-byte root and the current epoch.
-    /// Derives K_{start_epoch} and K_{start_epoch+1} in O(1).
+    /// Seeds the window with {start_epoch-BACK, …, start_epoch, start_epoch+1}.
     pub fn new(root_key: [u8; 32], start_epoch: Epoch) -> Self {
-        let k = epoch_key(&root_key, start_epoch);
-        let k_next = epoch_key(&root_key, start_epoch + 1);
         let mut keys = BTreeMap::new();
-        keys.insert(start_epoch, EpochKey(k));
-        keys.insert(start_epoch + 1, EpochKey(k_next));
+        // Past epochs (backward tolerance).
+        for i in 0..=EPOCH_BACK_TOLERANCE {
+            let e = start_epoch.saturating_sub(i);
+            keys.entry(e).or_insert_with(|| EpochKey(epoch_key(&root_key, e)));
+        }
+        // One epoch ahead so we can decrypt frames from a slightly faster peer.
+        keys.insert(start_epoch + 1, EpochKey(epoch_key(&root_key, start_epoch + 1)));
         Self {
             root_key: Mutex::new(Zeroizing::new(root_key)),
             inner: Mutex::new(KeyWindow {
@@ -70,12 +81,14 @@ impl KeyStore {
         let mut w = self.inner.lock().unwrap();
         while w.current < target {
             let next = w.current + 1;
+            // Add the epoch one ahead of the new top so we can decrypt
+            // frames from a slightly faster peer after the advance.
             let new_top = next + 1;
-            let kk = epoch_key(&root, new_top);
-            w.keys.insert(new_top, EpochKey(kk));
-            if next >= 2 {
-                // EpochKey's Drop zeroizes the bytes.
-                w.keys.remove(&(next - 2));
+            w.keys.insert(new_top, EpochKey(epoch_key(&root, new_top)));
+            // Evict the epoch that falls outside the backward tolerance window.
+            // Window after advance: {next-BACK, …, next, next+1}.
+            if next > EPOCH_BACK_TOLERANCE {
+                w.keys.remove(&(next - EPOCH_BACK_TOLERANCE - 1));
             }
             w.current = next;
         }
@@ -90,7 +103,11 @@ impl KeyStore {
         let cipher = ChaCha20Poly1305::new(Key::from_slice(&k.0));
         cipher
             .encrypt(Nonce::from_slice(nonce), Payload { msg: pt, aad })
-            .map_err(|_| Error::Other("seal failed".into()))
+            .map_err(|_| {
+                warn!(epoch, "seal failed");
+                Error::Other("seal failed".into())
+            })
+
     }
 
     /// Decrypt a frame, with bounded forward-resync for nodes that are slightly
@@ -118,13 +135,27 @@ impl KeyStore {
             if let Some(k) = w.keys.get(&epoch) {
                 Resolved::Window(k.0)
             } else {
+                let Some((&min_epoch, _)) = w.keys.iter().next() else {
+                    return Err(Error::AuthFailed);
+                };
                 let Some((&top_epoch, _)) = w.keys.iter().rev().next() else {
                     return Err(Error::AuthFailed);
                 };
-                // Reject too-old and too-far-ahead (DoS guard).
-                if epoch <= w.current || epoch > top_epoch + MAX_RESYNC_EPOCHS {
+                // Reject too-old (below the window floor) and too-far-ahead (DoS guard).
+                if epoch < min_epoch {
+                    debug!(epoch, current = w.current, "open: epoch too old");
                     return Err(Error::AuthFailed);
                 }
+                if epoch > top_epoch + MAX_RESYNC_EPOCHS {
+                    warn!(
+                        epoch,
+                        top = top_epoch,
+                        max_resync = MAX_RESYNC_EPOCHS,
+                        "open: epoch too far ahead"
+                    );
+                    return Err(Error::AuthFailed);
+                }
+
                 Resolved::Resync
             }
             // lock released here
@@ -141,7 +172,11 @@ impl KeyStore {
         let cipher = ChaCha20Poly1305::new(Key::from_slice(&*key));
         cipher
             .decrypt(Nonce::from_slice(nonce), Payload { msg: ct, aad })
-            .map_err(|_| Error::AuthFailed)
+            .map_err(|_| {
+                warn!(epoch, "open: AEAD auth failed (wrong key or corrupted data)");
+                Error::AuthFailed
+            })
+
         // `key` dropped and zeroized here
     }
 }
@@ -167,15 +202,17 @@ mod tests {
     }
 
     #[test]
-    fn advance_keeps_three_keys() {
+    fn advance_keeps_correct_window() {
+        // start=5 → window {3,4,5,6}; advance to 7 → {5,6,7,8}
         let ks = KeyStore::new([1u8; 32], 5);
         ks.advance(7);
         let g = ks.inner.lock().unwrap();
         assert_eq!(g.current, 7);
-        assert!(g.keys.contains_key(&6));
-        assert!(g.keys.contains_key(&7));
-        assert!(g.keys.contains_key(&8));
-        assert!(!g.keys.contains_key(&5));
+        // window is {current-BACK .. current+1} = {5,6,7,8}
+        for e in 5u32..=8 {
+            assert!(g.keys.contains_key(&e), "missing epoch {e}");
+        }
+        assert!(!g.keys.contains_key(&4), "epoch 4 should have been evicted");
     }
 
     #[test]
@@ -239,12 +276,29 @@ mod tests {
 
     #[test]
     fn resync_old_epoch_rejected() {
-        // Epochs at or below w.current cannot be opened via resync
-        // (ratchet is one-way; if not in window, they're gone).
+        // Epochs below the window floor are rejected.
+        // start=5, window={3,4,5,6}; advance to 7 → window={5,6,7,8}
         let ks = KeyStore::new([5u8; 32], 5);
-        ks.advance(7); // window: {6, 7, 8}, current = 7
-        // epoch 5 < current(7): rejected
-        assert!(ks.open(5, &[0u8; 12], b"x", b"garbage").is_err());
+        ks.advance(7); // window floor = 5
+        // epoch 4 < min(window)=5: rejected
+        assert!(ks.open(4, &[0u8; 12], b"x", b"garbage").is_err());
+    }
+
+    #[test]
+    fn backward_tolerance_two_epochs() {
+        // Simulates the observed failure: node A clock is 2 epochs (120s) ahead.
+        // Node B (epoch=100) must decrypt frames sealed by A (epoch=102).
+        // Also: A must decrypt frames from B sealed at epoch 100.
+        let a = KeyStore::new([7u8; 32], 102); // fast machine
+        let b = KeyStore::new([7u8; 32], 100); // slow machine
+
+        // B's frame (epoch 100) — A's window {100,101,102,103} includes it.
+        let ct_b = b.seal(100, &[0u8; 12], b"aad", b"from_b").unwrap();
+        assert_eq!(a.open(100, &[0u8; 12], b"aad", &ct_b).unwrap(), b"from_b");
+
+        // A's frame (epoch 102) — B's window {98,99,100,101}; 102 triggers resync.
+        let ct_a = a.seal(102, &[0u8; 12], b"aad", b"from_a").unwrap();
+        assert_eq!(b.open(102, &[0u8; 12], b"aad", &ct_a).unwrap(), b"from_a");
     }
 
     #[test]
