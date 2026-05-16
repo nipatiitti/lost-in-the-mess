@@ -12,6 +12,8 @@ use std::sync::Mutex;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use litm_common::{Epoch, Error, Result};
+use tracing::{debug, warn};
+
 
 const RATCHET_INFO: &[u8] = b"kova-mesh/ratchet/v1";
 
@@ -90,7 +92,11 @@ impl KeyStore {
         let cipher = ChaCha20Poly1305::new(Key::from_slice(&k.0));
         cipher
             .encrypt(Nonce::from_slice(nonce), Payload { msg: pt, aad })
-            .map_err(|_| Error::Other("seal failed".into()))
+            .map_err(|_| {
+                warn!(epoch, "seal failed");
+                Error::Other("seal failed".into())
+            })
+
     }
 
     /// Decrypt a frame, with bounded forward-resync for nodes that are slightly
@@ -122,9 +128,20 @@ impl KeyStore {
                     return Err(Error::AuthFailed);
                 };
                 // Reject too-old and too-far-ahead (DoS guard).
-                if epoch <= w.current || epoch > top_epoch + MAX_RESYNC_EPOCHS {
+                if epoch <= w.current {
+                    debug!(epoch, current = w.current, "open: epoch too old");
                     return Err(Error::AuthFailed);
                 }
+                if epoch > top_epoch + MAX_RESYNC_EPOCHS {
+                    warn!(
+                        epoch,
+                        top = top_epoch,
+                        max_resync = MAX_RESYNC_EPOCHS,
+                        "open: epoch too far ahead"
+                    );
+                    return Err(Error::AuthFailed);
+                }
+
                 Resolved::Resync
             }
             // lock released here
@@ -141,7 +158,11 @@ impl KeyStore {
         let cipher = ChaCha20Poly1305::new(Key::from_slice(&*key));
         cipher
             .decrypt(Nonce::from_slice(nonce), Payload { msg: ct, aad })
-            .map_err(|_| Error::AuthFailed)
+            .map_err(|_| {
+                warn!(epoch, "open: AEAD auth failed (wrong key or corrupted data)");
+                Error::AuthFailed
+            })
+
         // `key` dropped and zeroized here
     }
 }
