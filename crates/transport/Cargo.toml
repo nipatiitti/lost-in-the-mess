@@ -14,7 +14,7 @@ sha2              = "0.10"
 zeroize           = { version = "1", features = ["derive"] }
 
 # Radio
-wfb_rs            = { git = "https://github.com/kova-labs/kova-wfb-rs" }
+wfb_rs            = { git = "https://github.com/nipatiitti/kova-wfb-rs.git" }
 
 # Plumbing
 tokio             = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time", "macros", "net"] }

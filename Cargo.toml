@@ -17,4 +17,10 @@ litm-mesh      = { path = "crates/mesh" }
 app_sdk        = { path = "crates/app_sdk" }
 
 #External
-wfb_rs         = { git = "https://github.com/kova-labs/kova-wfb-rs.git" }
+wfb_rs         = { git = "https://github.com/nipatiitti/kova-wfb-rs" }
+
+# [patch."https://github.com/kova-labs/kova-wfb-rs.git"]
+# wfb_rs = { path = "../nibs-kova-wfb" }
+
+# [patch."https://github.com/kova-labs/kova-wfb-rs"]
+# wfb_rs = { path = "../nibs-kova-wfb" }
