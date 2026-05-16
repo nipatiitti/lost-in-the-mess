@@ -11,7 +11,7 @@ use tower_http::cors::CorsLayer;
 use tracing::info;
 use base64::{Engine as _, prelude::BASE64_STANDARD};
 
-use app_sdk::{MessagePayload, Node, NodeBuilder};
+use app_sdk::{MessagePayload, Node, NodeBuilder, VideoCodec, VideoStreamer};
 
 #[derive(Parser)]
 struct Cli {
@@ -27,6 +27,7 @@ struct Cli {
 struct AppState {
     node: Node,
     messages: Arc<Mutex<Vec<ApiMessage>>>,
+    video_streamer: Arc<Mutex<Option<VideoStreamer>>>,
 }
 
 #[derive(Serialize, Clone)]
@@ -50,6 +51,13 @@ struct GodData {
 struct SendRequest {
     text: Option<String>,
     image: Option<String>, // Data URI
+}
+
+#[derive(Deserialize)]
+struct SendVideoFrameRequest {
+    width: u16,
+    height: u16,
+    data: String, // base64-encoded JPEG
 }
 
 async fn get_data(State(state): State<AppState>) -> Json<GodData> {
@@ -95,6 +103,34 @@ async fn send_message(
         Json(serde_json::json!({ "status": "ok" }))
     } else {
         Json(serde_json::json!({ "status": "error", "message": "Nothing to send" }))
+    }
+}
+
+async fn send_video_frame(
+    State(state): State<AppState>,
+    Json(req): Json<SendVideoFrameRequest>,
+) -> Json<serde_json::Value> {
+    let data = match BASE64_STANDARD.decode(&req.data) {
+        Ok(d) => d,
+        Err(e) => {
+            return Json(serde_json::json!({ "status": "error", "message": format!("bad base64: {}", e) }));
+        }
+    };
+
+    let mut guard = state.video_streamer.lock().unwrap();
+    let streamer = guard.get_or_insert_with(|| {
+        info!("Initializing VideoStreamer (MJPEG)");
+        VideoStreamer::new(state.node.clone(), VideoCodec::Mjpeg)
+    });
+
+    match streamer.send_frame(req.width, req.height, data) {
+        Ok(obj_id) => {
+            Json(serde_json::json!({ "status": "ok", "object_id": obj_id }))
+        }
+        Err(e) => {
+            tracing::error!("Failed to send video frame: {}", e);
+            Json(serde_json::json!({ "status": "error", "message": e.to_string() }))
+        }
     }
 }
 
@@ -174,11 +210,12 @@ async fn main() {
         }
     });
 
-    let state = AppState { node, messages };
+    let state = AppState { node, messages, video_streamer: Arc::new(Mutex::new(None)) };
 
     let app = Router::new()
         .route("/api/data", get(get_data))
         .route("/api/send", post(send_message))
+        .route("/api/video/frame", post(send_video_frame))
         .layer(CorsLayer::permissive())
         .with_state(state);
 

@@ -7,6 +7,7 @@
   import PacketLog from './lib/PacketLog.svelte';
   import Composer from './lib/Composer.svelte';
 
+
   let data = {
     local_id: 0,
     neighbors: [],
@@ -249,6 +250,7 @@
           <NodeGrid {nodes} selected={selectedNode} setSelected={(n) => selectedNode = n} />
         {:else if screen === "uplink"}
           <Composer {nodes} onSend={handleSend} {lastResult} entries={formattedMessages} />
+
         {:else if screen === "log"}
           <PacketLog entries={formattedMessages} />
         {/if}
