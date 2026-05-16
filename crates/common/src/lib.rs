@@ -158,7 +158,7 @@ pub trait Delivery: Send + Sync + 'static {
     fn send_object(&self, id: ObjectId, payload: Vec<u8>, policy: SendPolicy) -> Result<()>;
     fn subscribe(&self) -> mpsc::Receiver<DeliveredObject>;
     fn decoded_bitmap(&self) -> ObjectBitmap;
-    fn note_peer_coverage(&self, peer: NodeId, bitmap: ObjectBitmap);
+    fn note_peer_coverage(&self, peer: NodeId, bitmap: ObjectBitmap, prr: f32);
     fn subscribe_telemetry(&self) -> mpsc::Receiver<RaptorEvent> {
         mpsc::channel(1).1 // Default empty receiver
     }

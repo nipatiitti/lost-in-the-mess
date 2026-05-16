@@ -219,7 +219,7 @@ mod tests {
         fn decoded_bitmap(&self) -> ObjectBitmap {
             ObjectBitmap::default()
         }
-        fn note_peer_coverage(&self, _peer: NodeId, _bitmap: ObjectBitmap) {}
+        fn note_peer_coverage(&self, _peer: NodeId, _bitmap: ObjectBitmap, _prr: f32) {}
     }
 
     // --- MockMesh ---

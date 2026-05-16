@@ -219,7 +219,11 @@ impl MeshService {
                         .unwrap()
                         .insert(meta.sender_id, beacon.neighbors_heard.clone());
 
-                    delivery.note_peer_coverage(meta.sender_id, beacon.decoded);
+                    let prr = {
+                        let table = neighbor_table.read().unwrap();
+                        table.get(&meta.sender_id).map(|s| s.prr).unwrap_or(0.5)
+                    };
+                    delivery.note_peer_coverage(meta.sender_id, beacon.decoded, prr);
                 }
             }
         });
@@ -303,7 +307,7 @@ impl MeshService {
     }
 
     fn spawn_flooding_task(transport: Arc<dyn Transport>, kind: Kind) {
-        let seen_hashes: Arc<RwLock<HashMap<[u8; 32], (u32, Instant)>>> =
+        let seen_hashes: Arc<RwLock<HashMap<u64, (u32, Instant)>>> =
             Arc::new(RwLock::new(HashMap::new()));
 
         let hashes_for_cleanup = Arc::clone(&seen_hashes);
@@ -324,7 +328,7 @@ impl MeshService {
 
         tokio::spawn(async move {
             while let Some((meta, payload)) = rx.recv().await {
-                let hash: [u8; 32] = blake3::hash(&payload).into();
+                let Some(hash) = flood_key(kind, &payload) else { continue; };
                 let origin_id = meta.origin_id;
 
                 let is_new = {
@@ -363,6 +367,27 @@ impl MeshService {
                 }
             }
         });
+    }
+}
+
+/// Extract a u64 dedup key for the flooding seen-set.
+/// For Fec: encodes (object_id, esi) — the two fields that uniquely identify a symbol.
+/// For everything else: first 8 bytes of BLAKE3(payload).
+fn flood_key(kind: Kind, payload: &[u8]) -> Option<u64> {
+    match kind {
+        Kind::Fec => {
+            // FEC frame layout: object_id(4) | block(1) | oti(12) | esi(4) | …
+            if payload.len() < 21 {
+                return None;
+            }
+            let oid = u32::from_be_bytes(payload[0..4].try_into().unwrap()) as u64;
+            let esi = u32::from_be_bytes(payload[17..21].try_into().unwrap()) as u64;
+            Some((oid << 32) | esi)
+        }
+        _ => {
+            let h = blake3::hash(payload);
+            Some(u64::from_le_bytes(h.as_bytes()[0..8].try_into().unwrap()))
+        }
     }
 }
 

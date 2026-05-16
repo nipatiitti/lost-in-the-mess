@@ -48,6 +48,7 @@ pub struct RaptorQDelivery<T: Transport + ?Sized> {
     decoders: Arc<Mutex<HashMap<ObjectId, (Decoder, Instant, u32, u32)>>>,
     completed_objects: Arc<Mutex<CompletedSet>>,
     peer_coverage: Arc<Mutex<HashMap<NodeId, ObjectBitmap>>>,
+    peer_prr: Arc<Mutex<HashMap<NodeId, f32>>>,
     local_bitmap: Arc<Mutex<ObjectBitmap>>,
 }
 
@@ -65,6 +66,7 @@ impl<T: Transport + 'static + ?Sized> RaptorQDelivery<T> {
             decoders: Arc::new(Mutex::new(HashMap::new())),
             completed_objects: Arc::new(Mutex::new(CompletedSet::new(COMPLETED_CAP))),
             peer_coverage: Arc::new(Mutex::new(HashMap::new())),
+            peer_prr: Arc::new(Mutex::new(HashMap::new())),
             local_bitmap: Arc::new(Mutex::new(ObjectBitmap::default())),
         });
 
@@ -188,13 +190,22 @@ impl<T: Transport + 'static + ?Sized> Delivery for RaptorQDelivery<T> {
         let transport = self.transport.clone();
         let payload_len = payload.len() as u64;
         let peer_coverage = self.peer_coverage.clone();
+        let peer_prr = self.peer_prr.clone();
 
         tokio::spawn(async move {
             let symbol_size = 1374;
             let encoder = Encoder::with_defaults(&payload, symbol_size);
 
             let k = (payload_len as f64 / symbol_size as f64).ceil() as u32;
-            let target_symbols = (((k + 4) as f64 * 1.2) / 0.8).ceil() as u32;
+            let effective_prr = {
+                let prr_map = peer_prr.lock().unwrap();
+                if prr_map.is_empty() {
+                    0.8_f32
+                } else {
+                    prr_map.values().cloned().fold(f32::INFINITY, f32::min).max(0.05)
+                }
+            };
+            let target_symbols = (((k + 4) as f64 * 1.2) / effective_prr as f64).ceil() as u32;
 
             let packets = encoder.get_encoded_packets(target_symbols);
 
@@ -246,7 +257,8 @@ impl<T: Transport + 'static + ?Sized> Delivery for RaptorQDelivery<T> {
         *self.local_bitmap.lock().unwrap()
     }
 
-    fn note_peer_coverage(&self, peer: NodeId, bitmap: ObjectBitmap) {
+    fn note_peer_coverage(&self, peer: NodeId, bitmap: ObjectBitmap, prr: f32) {
         self.peer_coverage.lock().unwrap().insert(peer, bitmap);
+        self.peer_prr.lock().unwrap().insert(peer, prr);
     }
 }
