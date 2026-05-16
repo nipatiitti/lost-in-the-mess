@@ -80,8 +80,8 @@
         label: `N-${n.id.toString().padStart(2, '0')}`,
         prr: n.prr,
         state: getPrrState(n.prr),
-        dbm: -65 + Math.floor(Math.random() * 20), // mock
-        hops: 1, // mock
+        dbm: n.rssi_dbm,
+        hops: 1, // still mock until mesh implements multi-hop Dijkstra export
         x: 50 + radius * Math.cos(angle),
         y: 50 + radius * Math.sin(angle)
       });
