@@ -1,6 +1,4 @@
-use litm_common::{
-    Delivery, Kind, Mesh, NeighborInfo, NodeId, ObjectBitmap, Transport,
-};
+use litm_common::{Delivery, Kind, Mesh, NeighborInfo, NodeId, ObjectBitmap, Transport};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -63,10 +61,7 @@ impl MeshService {
             Arc::clone(&neighbor_table),
             Arc::clone(&link_state),
         );
-        Self::spawn_neighbor_eviction(
-            Arc::clone(&neighbor_table),
-            Arc::clone(&link_state),
-        );
+        Self::spawn_neighbor_eviction(Arc::clone(&neighbor_table), Arc::clone(&link_state));
 
         Self::spawn_flooding_task(Arc::clone(&transport), Kind::Fec);
         Self::spawn_flooding_task(Arc::clone(&transport), Kind::Control);
@@ -111,9 +106,7 @@ impl MeshService {
                         let table = neighbor_table.read().unwrap();
                         table
                             .iter()
-                            .map(|(id, state)| {
-                                (*id, (state.prr * 255.0).clamp(0.0, 255.0) as u8)
-                            })
+                            .map(|(id, state)| (*id, (state.prr * 255.0).clamp(0.0, 255.0) as u8))
                             .collect()
                     };
 
@@ -174,8 +167,8 @@ impl MeshService {
                         state.last_seen = Instant::now();
                         state.bitmap = beacon.decoded;
                         // Smooth RSSI with fast EMA — responds within a couple of beacons.
-                        state.rssi_dbm = (state.rssi_dbm as f32 * 0.4
-                            + meta.rssi_dbm as f32 * 0.6) as i8;
+                        state.rssi_dbm =
+                            (state.rssi_dbm as f32 * 0.4 + meta.rssi_dbm as f32 * 0.6) as i8;
 
                         match state.expected_beacon_seq {
                             None => {
@@ -196,8 +189,7 @@ impl MeshService {
                                         Some(rssi_prr) => f32::min(rssi_prr, delivery_prr),
                                         None => delivery_prr,
                                     };
-                                    state.prr =
-                                        (state.prr * 0.3 + inst_prr * 0.7).clamp(0.0, 1.0);
+                                    state.prr = (state.prr * 0.3 + inst_prr * 0.7).clamp(0.0, 1.0);
                                 } else {
                                     // Received seq is behind expected.
                                     // Large gap → genuine peer restart; small gap → late/reordered.
@@ -242,9 +234,9 @@ impl MeshService {
                 let now = Instant::now();
                 let mut table = neighbor_table.write().unwrap();
                 table.retain(|id, state| {
-                    let alive = now.duration_since(state.last_seen) <= Duration::from_millis(450);
+                    let alive = now.duration_since(state.last_seen) <= Duration::from_millis(2000);
                     if !alive {
-                        tracing::info!(peer = id, "neighbor evicted (no beacon for 450 ms)");
+                        tracing::info!(peer = id, "neighbor evicted (no beacon for 2000 ms)");
                     }
                     alive
                 });
@@ -421,7 +413,11 @@ mod tests {
     fn test_prr_small_backward_seq_is_skipped() {
         // Small backward movement (reorder/late packet) — PRR and expected unchanged.
         let (prr, next) = compute_prr(0.8, Some(10), 9, GOOD_RSSI);
-        assert!((prr - 0.8).abs() < 1e-6, "prr should be unchanged, got {}", prr);
+        assert!(
+            (prr - 0.8).abs() < 1e-6,
+            "prr should be unchanged, got {}",
+            prr
+        );
         assert_eq!(next, Some(10), "expected should be unchanged");
     }
 
@@ -429,7 +425,11 @@ mod tests {
     fn test_prr_large_backward_seq_is_restart() {
         // Large backward movement — genuine restart, PRR resets to neutral.
         let (prr, next) = compute_prr(0.9, Some(2000), 5, GOOD_RSSI);
-        assert!((prr - 0.5).abs() < 1e-6, "prr should reset to 0.5, got {}", prr);
+        assert!(
+            (prr - 0.5).abs() < 1e-6,
+            "prr should reset to 0.5, got {}",
+            prr
+        );
         assert_eq!(next, None, "next_expected should be None on restart");
     }
 
@@ -459,6 +459,10 @@ mod tests {
             expected = next;
         }
         // After 5 consecutive perfect beacons from degraded state, should be > 0.9
-        assert!(prr > 0.9, "prr={} should recover quickly with perfect beacons", prr);
+        assert!(
+            prr > 0.9,
+            "prr={} should recover quickly with perfect beacons",
+            prr
+        );
     }
 }
