@@ -62,8 +62,11 @@ impl Radio {
             ring_size: cfg.ring_size,
         };
 
+        tracing::info!(iface = %cfg.iface, "opening WfbTx");
         let mut tx = WfbTx::open(&tx_cfg).map_err(|e| Error::Io(format!("WfbTx::open: {e}")))?;
+        tracing::info!("opening WfbRx");
         let rx = WfbRx::open(&rx_cfg).map_err(|e| Error::Io(format!("WfbRx::open: {e}")))?;
+        tracing::info!("radio threads spawning");
 
         let (tx_in_s, tx_in_r) = bounded::<Vec<u8>>(256);
         let (rx_out_s, rx_out_r) = bounded::<RxFrame>(256);

@@ -67,7 +67,11 @@ impl Subscribers {
 impl WifiTransport {
     pub fn start(cfg: WifiTransportConfig) -> Result<Arc<Self>> {
         let epoch = current_epoch();
+
+        tracing::info!(epoch, "initializing transport");
         let keys = Arc::new(KeyStore::new(cfg.root_key, epoch));
+
+        tracing::info!(epoch, "starting radio");
         let radio = Radio::start(cfg.radio)?;
 
         let me = Arc::new(Self {

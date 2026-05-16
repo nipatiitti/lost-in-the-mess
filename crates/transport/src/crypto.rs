@@ -19,6 +19,11 @@ const RATCHET_INFO: &[u8] = b"kova-mesh/ratchet/v1";
 struct EpochKey([u8; 32]);
 
 pub struct KeyStore {
+    // Root key kept in memory for O(1) epoch key derivation.
+    // Zeroized on drop. Forward secrecy holds per-device after epoch advance
+    // (past keys are gone from the window), but not against root key extraction.
+    // For demo: root is hardcoded, so this tradeoff is acceptable.
+    root_key: Mutex<Zeroizing<[u8; 32]>>,
     inner: Mutex<KeyWindow>,
 }
 
@@ -27,22 +32,26 @@ struct KeyWindow {
     keys: BTreeMap<Epoch, EpochKey>,
 }
 
+/// Derive the key for a specific epoch directly from the root key.
+/// O(1) regardless of epoch magnitude.
+fn epoch_key(root: &[u8; 32], epoch: Epoch) -> [u8; 32] {
+    let hk = Hkdf::<Sha256>::new(Some(&epoch.to_le_bytes()), root);
+    let mut out = [0u8; 32];
+    hk.expand(RATCHET_INFO, &mut out).expect("HKDF expand 32B");
+    out
+}
+
 impl KeyStore {
-    /// Initialize from a 32-byte root and the starting epoch.
-    /// Forward-ratchets `start_epoch` times to derive K_{start_epoch}, then
-    /// also derives K_{start_epoch+1}. There is no K_{start_epoch-1} because
-    /// the ratchet is one-way; the window grows to 3 keys after the first advance.
-    pub fn new(mut root_key: [u8; 32], start_epoch: Epoch) -> Self {
-        let mut k = root_key;
-        for _ in 0..start_epoch {
-            k = ratchet(&k);
-        }
-        let k_next = ratchet(&k);
+    /// Initialize from a 32-byte root and the current epoch.
+    /// Derives K_{start_epoch} and K_{start_epoch+1} in O(1).
+    pub fn new(root_key: [u8; 32], start_epoch: Epoch) -> Self {
+        let k = epoch_key(&root_key, start_epoch);
+        let k_next = epoch_key(&root_key, start_epoch + 1);
         let mut keys = BTreeMap::new();
         keys.insert(start_epoch, EpochKey(k));
         keys.insert(start_epoch + 1, EpochKey(k_next));
-        root_key.zeroize();
         Self {
+            root_key: Mutex::new(Zeroizing::new(root_key)),
             inner: Mutex::new(KeyWindow {
                 current: start_epoch,
                 keys,
@@ -55,16 +64,14 @@ impl KeyStore {
     }
 
     /// Advance the window so `current == target` after the call.
-    /// Each step adds K_{new_top+1} and drops K_{new_top-2}.
+    /// Each step adds K_{new_top+1} (derived directly) and drops K_{new_top-2}.
     pub fn advance(&self, target: Epoch) {
+        let root = self.root_key.lock().unwrap();
         let mut w = self.inner.lock().unwrap();
         while w.current < target {
             let next = w.current + 1;
             let new_top = next + 1;
-            let Some(k_next) = w.keys.get(&next) else {
-                break;
-            };
-            let kk = ratchet(&k_next.0);
+            let kk = epoch_key(&root, new_top);
             w.keys.insert(new_top, EpochKey(kk));
             if next >= 2 {
                 // EpochKey's Drop zeroizes the bytes.
@@ -96,16 +103,14 @@ impl KeyStore {
     /// - Forward resync is capped at `MAX_RESYNC_EPOCHS` steps beyond the top of
     ///   the stored window. Exceeding the cap costs a single bounds check and
     ///   returns `AuthFailed` immediately — no HKDF work is done.
-    /// - Temporary resync keys are wrapped in `Zeroizing` and wiped on drop,
-    ///   including on panic paths.
+    /// - Resync keys are derived directly from root in O(1) and wrapped in
+    ///   `Zeroizing`, wiped on drop including on panic paths.
     pub fn open(&self, epoch: Epoch, nonce: &[u8; 12], aad: &[u8], ct: &[u8]) -> Result<Vec<u8>> {
-        // Attacker-controlled upper bound on HKDF work per packet.
-        // 5 steps × ~1 µs/step = ~5 µs max at line rate; negligible.
         const MAX_RESYNC_EPOCHS: u32 = 5;
 
         enum Resolved {
             Window([u8; 32]),
-            Resync { base: [u8; 32], steps: u32 },
+            Resync, // epoch key not in window; will derive from root
         }
 
         let resolved = {
@@ -113,32 +118,23 @@ impl KeyStore {
             if let Some(k) = w.keys.get(&epoch) {
                 Resolved::Window(k.0)
             } else {
-                let Some((&top_epoch, top_k)) = w.keys.iter().rev().next() else {
+                let Some((&top_epoch, _)) = w.keys.iter().rev().next() else {
                     return Err(Error::AuthFailed);
                 };
-                // Reject too-old (ratchet is one-way) and too-far-ahead (HKDF-DoS guard).
+                // Reject too-old and too-far-ahead (DoS guard).
                 if epoch <= w.current || epoch > top_epoch + MAX_RESYNC_EPOCHS {
                     return Err(Error::AuthFailed);
                 }
-                Resolved::Resync {
-                    base: top_k.0, // copy bytes out before releasing lock
-                    steps: epoch - top_epoch,
-                }
+                Resolved::Resync
             }
             // lock released here
         };
 
-        // Derive the working key. Each intermediate value is wrapped in Zeroizing
-        // so it is wiped on assignment/drop, even if decrypt panics.
         let key: Zeroizing<[u8; 32]> = match resolved {
             Resolved::Window(k) => Zeroizing::new(k),
-            Resolved::Resync { base, steps } => {
-                let mut k = Zeroizing::new(base);
-                for _ in 0..steps {
-                    let next = Zeroizing::new(ratchet(&k));
-                    k = next;
-                }
-                k
+            Resolved::Resync => {
+                let root = self.root_key.lock().unwrap();
+                Zeroizing::new(epoch_key(&root, epoch))
             }
         };
 
@@ -150,12 +146,6 @@ impl KeyStore {
     }
 }
 
-fn ratchet(k: &[u8; 32]) -> [u8; 32] {
-    let hk = Hkdf::<Sha256>::new(None, k);
-    let mut out = [0u8; 32];
-    hk.expand(RATCHET_INFO, &mut out).expect("HKDF expand 32B");
-    out
-}
 
 #[cfg(test)]
 mod tests {
