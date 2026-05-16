@@ -12,9 +12,11 @@ path = "src/main.rs"
 app_sdk     = { path = "../app_sdk" }
 litm-common = { path = "../common" }
 tokio       = { version = "1.37", features = ["full"] }
-ratatui     = "0.29"
+ratatui     = "0.30"
 crossterm   = { version = "0.28", features = ["event-stream"] }
 chrono      = { version = "0.4", default-features = false, features = ["clock"] }
 anyhow      = "1"
 futures     = "0.3"
 clap        = { version = "4.4", features = ["derive"] }
+ratatui-image = { version = "11.0.2", default-features = false, features = ["crossterm", "image-defaults"] }
+image       = { version = "0.25", default-features = false, features = ["jpeg"] }

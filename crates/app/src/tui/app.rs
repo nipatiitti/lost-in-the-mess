@@ -5,12 +5,13 @@ use chrono::{DateTime, Local};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use litm_common::{NeighborInfo, NodeId};
 
-use super::events::AppEvent;
+use super::events::{AppEvent, DecodedVideoFrame};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum ActivePanel {
     Topology,
     Messages,
+    Video,
 }
 
 pub struct MessageEntry {
@@ -30,6 +31,7 @@ pub struct App {
     pub messages_scroll: usize,
     pub compose_input: String,
     pub compose_cursor: usize,
+    pub latest_video: Option<DecodedVideoFrame>,
 }
 
 impl App {
@@ -45,6 +47,7 @@ impl App {
             messages_scroll: 0,
             compose_input: String::new(),
             compose_cursor: 0,
+            latest_video: None,
         }
     }
 
@@ -67,6 +70,10 @@ impl App {
                 }
             }
 
+            AppEvent::VideoFrame(frame) => {
+                self.latest_video = Some(frame);
+            }
+
             AppEvent::MeshClosed => {
                 self.should_quit = true;
             }
@@ -77,19 +84,24 @@ impl App {
         }
     }
 
+    fn cycle_panel(&mut self, dir: i8) {
+        let panels = [ActivePanel::Topology, ActivePanel::Messages, ActivePanel::Video];
+        let idx = panels.iter().position(|p| *p == self.active_panel).unwrap_or(0);
+        let next = (idx as i8 + dir).rem_euclid(panels.len() as i8) as usize;
+        self.active_panel = panels[next];
+        if self.active_panel == ActivePanel::Messages {
+            self.messages_scroll = self.messages.len().saturating_sub(1);
+        }
+    }
+
     fn handle_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Char('q') if ctrl => {
                 self.should_quit = true;
             }
-            KeyCode::Char('t') if ctrl => {
-                self.active_panel = ActivePanel::Topology;
-            }
-            KeyCode::Char('m') if ctrl => {
-                self.active_panel = ActivePanel::Messages;
-                self.messages_scroll = self.messages.len().saturating_sub(1);
-            }
+            KeyCode::Tab => self.cycle_panel(1),
+            KeyCode::BackTab => self.cycle_panel(-1),
             KeyCode::Down | KeyCode::Char('j') if self.compose_input.is_empty() => {
                 if self.active_panel == ActivePanel::Messages {
                     let max = self.messages.len().saturating_sub(1);

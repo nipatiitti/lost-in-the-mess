@@ -5,10 +5,11 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Table},
 };
+use ratatui_image::{StatefulImage, picker::Picker};
 
 use super::app::{ActivePanel, App};
 
-pub fn render(f: &mut Frame, app: &App) {
+pub fn render(f: &mut Frame, app: &App, picker: &mut Picker) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(0)])
@@ -26,6 +27,7 @@ pub fn render(f: &mut Frame, app: &App) {
     match app.active_panel {
         ActivePanel::Topology => render_topology(f, cols[1], app),
         ActivePanel::Messages => render_messages_compose(f, cols[1], app),
+        ActivePanel::Video => render_video(f, cols[1], app, picker),
     }
 }
 
@@ -41,15 +43,17 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
         Span::raw("  "),
     ];
 
-    for (key, label, panel) in [
-        ("^T", "Topology", ActivePanel::Topology),
-        ("^M", "Messages", ActivePanel::Messages),
+    for (label, panel) in [
+        ("Topology", ActivePanel::Topology),
+        ("Messages", ActivePanel::Messages),
+        ("Video",    ActivePanel::Video),
     ] {
         let style = if app.active_panel == panel { highlight } else { normal };
-        spans.push(Span::styled(format!("[{key}] {label}  "), style));
+        spans.push(Span::styled(format!(" {label} "), style));
+        spans.push(Span::raw("  "));
     }
 
-    spans.push(Span::styled("[^Q] Quit", normal));
+    spans.push(Span::styled("[Tab] cycle  [^Q] Quit", normal));
 
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -109,7 +113,6 @@ fn render_topology(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_messages_compose(f: &mut Frame, area: Rect, app: &App) {
-    // Split right panel: messages on top, compose box fixed at bottom
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(3)])
@@ -156,7 +159,27 @@ fn render_compose(f: &mut Frame, area: Rect, app: &App) {
     let display = format!("{}{}", prefix, app.compose_input);
     f.render_widget(Paragraph::new(display.as_str()), inner);
 
-    // Place terminal cursor at compose cursor position
     let cursor_x = inner.x + prefix.len() as u16 + app.compose_cursor as u16;
     f.set_cursor_position((cursor_x, inner.y));
+}
+
+fn render_video(f: &mut Frame, area: Rect, app: &App, picker: &mut Picker) {
+    let title = match &app.latest_video {
+        Some(v) => format!(" Video  from:{}  seq:{} ", v.source, v.seq),
+        None    => " Video  (waiting for stream...) ".to_string(),
+    };
+    let block = Block::default().borders(Borders::ALL).title(title);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if let Some(ref frame) = app.latest_video {
+        let mut protocol = picker.new_resize_protocol(frame.image.clone());
+        f.render_stateful_widget(StatefulImage::default(), inner, &mut protocol);
+    } else {
+        f.render_widget(
+            Paragraph::new("No video received yet.\nWaiting for MJPEG or Raw stream...")
+                .style(Style::default().fg(Color::DarkGray)),
+            inner,
+        );
+    }
 }
