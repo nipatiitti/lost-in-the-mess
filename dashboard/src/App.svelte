@@ -6,6 +6,7 @@
   import NodeGrid from './lib/NodeGrid.svelte';
   import PacketLog from './lib/PacketLog.svelte';
   import Composer from './lib/Composer.svelte';
+  import Streams from './lib/Streams.svelte';
 
 
   let data = {
@@ -232,7 +233,7 @@
 </script>
 
 <div class="shell">
-  <Sidebar {screen} {setScreen} {nodes} />
+  <Sidebar {screen} {setScreen} {nodes} activeStreamsCount={data.active_streams ? data.active_streams.length : 0} />
   
   <StatusBar 
     time={timeStr} 
@@ -250,7 +251,8 @@
           <NodeGrid {nodes} selected={selectedNode} setSelected={(n) => selectedNode = n} />
         {:else if screen === "uplink"}
           <Composer {nodes} onSend={handleSend} {lastResult} entries={formattedMessages} />
-
+        {:else if screen === "streams"}
+          <Streams activeStreams={data.active_streams || []} {nodes} />
         {:else if screen === "log"}
           <PacketLog entries={formattedMessages} />
         {/if}

@@ -1,8 +1,11 @@
 use axum::{
     Router,
-    extract::{Json, State},
+    extract::{Json, State, Path},
     routing::{get, post},
+    response::IntoResponse,
+    body::Body,
 };
+use tokio_stream::wrappers::ReceiverStream;
 use clap::Parser;
 use litm_common::{NeighborInfo, NodeId};
 use serde::{Deserialize, Serialize};
@@ -28,6 +31,7 @@ struct AppState {
     node: Node,
     messages: Arc<Mutex<Vec<ApiMessage>>>,
     video_ch: Arc<VideoChannel>,
+    active_streams: Arc<Mutex<std::collections::HashMap<NodeId, (u64, tokio::sync::watch::Sender<Vec<u8>>)> >>,
 }
 
 #[derive(Serialize, Clone)]
@@ -45,6 +49,7 @@ struct GodData {
     neighbors: Vec<NeighborInfo>,
     messages: Vec<ApiMessage>,
     topology: std::collections::HashMap<NodeId, Vec<(NodeId, f32)>>,
+    active_streams: Vec<NodeId>,
 }
 
 #[derive(Deserialize)]
@@ -61,11 +66,21 @@ struct SendVideoFrameRequest {
 }
 
 async fn get_data(State(state): State<AppState>) -> Json<GodData> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let mut active_streams = Vec::new();
+    {
+        let mut map = state.active_streams.lock().unwrap();
+        map.retain(|_, (ts, _)| now - *ts < 10);
+        active_streams.extend(map.keys().copied());
+    }
+    active_streams.sort();
+
     Json(GodData {
         local_id: state.node.local_id(),
         neighbors: state.node.neighbors(),
         topology: state.node.topology(),
         messages: state.messages.lock().unwrap().clone(),
+        active_streams,
     })
 }
 
@@ -123,6 +138,50 @@ async fn send_video_frame(
             tracing::error!("Failed to send video frame: {}", e);
             Json(serde_json::json!({ "status": "error", "message": e.to_string() }))
         }
+    }
+}
+
+async fn get_video_stream(
+    Path(id): Path<u32>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let rx = {
+        let map = state.active_streams.lock().unwrap();
+        map.get(&id).map(|(_, tx)| tx.subscribe())
+    };
+
+    if let Some(mut rx) = rx {
+        let (tx, axum_rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::convert::Infallible>>(4);
+        
+        tokio::spawn(async move {
+            let mut last_len = 0;
+            loop {
+                let bytes = rx.borrow_and_update().clone();
+                if !bytes.is_empty() && bytes.len() != last_len {
+                    let mut data = Vec::new();
+                    data.extend_from_slice(b"--frame\r\nContent-Type: image/jpeg\r\n\r\n");
+                    data.extend_from_slice(&bytes);
+                    data.extend_from_slice(b"\r\n");
+                    if tx.send(Ok(axum::body::Bytes::from(data))).await.is_err() {
+                        break;
+                    }
+                    last_len = bytes.len();
+                }
+                if rx.changed().await.is_err() {
+                    break;
+                }
+            }
+        });
+        
+        let body = Body::from_stream(ReceiverStream::new(axum_rx));
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::header::HeaderValue::from_static("multipart/x-mixed-replace; boundary=frame"),
+        );
+        (headers, body).into_response()
+    } else {
+        axum::http::StatusCode::NOT_FOUND.into_response()
     }
 }
 
@@ -203,12 +262,34 @@ async fn main() {
     });
 
     let video_ch = VideoChannel::new(node.transport());
-    let state = AppState { node, messages, video_ch };
+    let mut video_rx = video_ch.subscribe();
+    let active_streams: Arc<Mutex<std::collections::HashMap<NodeId, (u64, tokio::sync::watch::Sender<Vec<u8>>)> >> = Arc::new(Mutex::new(std::collections::HashMap::new()));
+    let streams_clone = active_streams.clone();
+
+    tokio::spawn(async move {
+        while let Some(frame) = video_rx.recv().await {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+            let mut map = streams_clone.lock().unwrap();
+            
+            if let Some((ts, tx)) = map.get_mut(&frame.source) {
+                *ts = now;
+                let _ = tx.send(frame.jpeg_bytes);
+            } else {
+                let (tx, _rx) = tokio::sync::watch::channel(frame.jpeg_bytes);
+                map.insert(frame.source, (now, tx));
+            }
+            
+            map.retain(|_, (ts, _)| now - *ts < 10);
+        }
+    });
+
+    let state = AppState { node, messages, video_ch, active_streams };
 
     let app = Router::new()
         .route("/api/data", get(get_data))
         .route("/api/send", post(send_message))
         .route("/api/video/frame", post(send_video_frame))
+        .route("/api/video/stream/:id", get(get_video_stream))
         .layer(CorsLayer::permissive())
         .with_state(state);
 

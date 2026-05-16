@@ -1,8 +1,9 @@
 <script>
-  import { Layers, Grid, Send, Activity } from '@lucide/svelte';
+  import { Layers, Grid, Send, Activity, Video } from '@lucide/svelte';
   export let screen;
   export let setScreen;
   export let nodes = [];
+  export let activeStreamsCount = 0;
 
   $: ok = nodes.filter(n => n.state === "ok").length;
   $: relay = nodes.filter(n => n.state === "relay").length;
@@ -12,6 +13,7 @@
   $: items = [
     { id: "topology", label: "Topology", icon: Layers, count: nodes.length },
     { id: "nodes",    label: "Nodes",    icon: Grid, count: nodes.length },
+    { id: "streams",  label: "Streams",  icon: Video, count: activeStreamsCount },
     { id: "uplink",   label: "Uplink",   icon: Send, count: null },
     { id: "log",      label: "Log",      icon: Activity, count: "LIVE" },
   ];
