@@ -237,7 +237,7 @@
 </script>
 
 <div class="shell">
-  <Sidebar {screen} {setScreen} {nodes} activeStreamsCount={data.active_streams ? data.active_streams.length : 0} />
+  <Sidebar {screen} {setScreen} {nodes} activeStreamsCount={data.active_streams ? data.active_streams.length : 0} {connected} />
   
   <StatusBar 
     time={timeStr} 

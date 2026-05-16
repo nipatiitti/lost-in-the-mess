@@ -4,11 +4,20 @@
   export let setScreen;
   export let nodes = [];
   export let activeStreamsCount = 0;
+  export let connected = true;
 
   $: ok = nodes.filter(n => n.state === "ok").length;
   $: relay = nodes.filter(n => n.state === "relay").length;
   $: lost = nodes.filter(n => n.state === "lost").length;
-  $: avgPrr = nodes.length ? (nodes.reduce((a,n) => a + n.prr, 0) / nodes.length).toFixed(2) : "0.00";
+  $: avgPrrNum = nodes.length ? (nodes.reduce((a,n) => a + n.prr, 0) / nodes.length) : 0;
+  $: avgPrr = avgPrrNum.toFixed(2);
+
+  $: healthColor = (() => {
+    if (!connected) return 'var(--lost-300)';
+    if (avgPrrNum >= 0.76) return 'var(--signal-300)';
+    if (avgPrrNum >= 0.26) return 'var(--uplink-300)';
+    return 'var(--lost-300)';
+  })();
 
   $: items = [
     { id: "topology", label: "Topology", icon: Layers, count: nodes.length },
@@ -56,7 +65,7 @@
   <div style="margin-top:auto;padding:14px 16px;border-top:1px solid var(--border)">
     <div class="stamp" style="font-size:9px;margin-bottom:10px">MESH HEALTH</div>
     <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px">
-      <div class="ticker" style="font-size:28px;color:var(--signal-300);font-weight:500">{avgPrr}</div>
+      <div class="ticker" style="font-size:28px;color:{healthColor};font-weight:500">{avgPrr}</div>
       <div class="stamp" style="font-size:9px">PRR.AVG</div>
     </div>
     <div style="display:flex;flex-direction:column;gap:6px">
