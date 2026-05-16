@@ -269,9 +269,10 @@ impl Transport for WifiTransport {
     }
 
     fn broadcast(&self, kind: Kind, payload: &[u8]) -> Result<()> {
-        // Plaintext layout: Kind(1) | payload_len(2 BE) | payload | zero-pad → MAX_PLAINTEXT.
-        // All frames are padded to the same size so a passive observer cannot distinguish
-        // a small beacon from a large FEC symbol by frame length (LPI/LPD, design decision 7).
+        // Plaintext layout: Kind(1) | payload_len(2 BE) | payload | zero-pad.
+        // FEC and Control frames are padded to MAX_PLAINTEXT for LPI/LPD.
+        // Beacons are sent at their natural size (hackathon trade-off: saves beacon
+        // radio budget at the cost of distinguishable frame lengths for beacons).
         if 3 + payload.len() > MAX_PLAINTEXT {
             return Err(Error::BadFrame("payload too large"));
         }
@@ -288,7 +289,11 @@ impl Transport for WifiTransport {
         let mut wire = vec![0u8; HEADER_LEN];
         header.encode(&mut wire)?;
 
-        let mut pt = vec![0u8; MAX_PLAINTEXT]; // pre-zeroed; trailing zeros are the pad
+        let pt_len = match kind {
+            Kind::Beacon => 3 + payload.len(),
+            _ => MAX_PLAINTEXT,
+        };
+        let mut pt = vec![0u8; pt_len];
         pt[0] = kind as u8;
         let len = payload.len() as u16;
         pt[1..3].copy_from_slice(&len.to_be_bytes());

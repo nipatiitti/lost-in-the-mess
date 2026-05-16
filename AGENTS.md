@@ -181,9 +181,15 @@ mutex on handler lists.
 The packet kind (Beacon / Fec / Control) is the first byte of the
 _plaintext_ fed to ChaCha20-Poly1305. A passive eavesdropper cannot
 distinguish beacons from data frames — this matters for low-probability-
-of-detection (LPI/LPD). To maintain this claim, short frames like beacons
-are length-padded to a standard size (~1500 B) so they cannot be distinguished
-from FEC frames.
+of-detection (LPI/LPD).
+
+**Hackathon exception (team decision):** Beacon frames are _not_ padded
+to MAX_PLAINTEXT. They are sent at their natural (variable) size.
+FEC and Control frames remain padded to MAX_PLAINTEXT.
+Trade-off: a passive observer can distinguish beacon frames from FEC/Control
+frames by frame length. This was accepted to reduce beacon radio budget
+(beacons fire every ~500 ms at ≤ ~100 B; padding would waste ~1300 B per
+frame). Full LPI/LPD for beacons is a post-hackathon hardening item.
 
 ### 8. Active jamming defense in mesh
 
