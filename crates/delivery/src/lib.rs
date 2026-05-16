@@ -69,6 +69,9 @@ impl<T: Transport + 'static + ?Sized> RaptorQDelivery<T> {
                 completed.push(frame.object_id);
                 self.local_bitmap.lock().unwrap().set(frame.object_id);
 
+                // Free memory! The decoder holds the full payload buffer.
+                decoders.remove(&frame.object_id);
+
                 let mut subscribers = self.subscribers.lock().unwrap();
                 subscribers.retain(|tx| {
                     tx.try_send(DeliveredObject {

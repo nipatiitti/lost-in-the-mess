@@ -20,7 +20,7 @@ pub struct VideoStreamer {
 
 impl VideoStreamer {
     pub fn new(node: Node, codec: VideoCodec) -> Self {
-        Self { node, seq: Arc::new(AtomicU32::new(0)), codec }
+        Self { node, seq: Arc::new(AtomicU32::new(rand::random())), codec }
     }
 
     pub fn send_frame(&self, width: u16, height: u16, data: Vec<u8>) -> Result<ObjectId> {
