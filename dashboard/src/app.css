@@ -307,35 +307,6 @@ button { font: inherit; }
 .nav-item .nav-count { margin-left: auto; color: var(--bone-400); font-size: 10px; }
 .nav-item.active .nav-count { color: var(--signal-300); }
 
-/* ---------- Tabs ---------- */
-.tabbar {
-  display: flex;
-  border-bottom: 1px solid var(--border);
-  background: var(--ink-050);
-  padding: 0 var(--space-5);
-  align-items: center;
-  height: 44px;
-}
-.tab {
-  position: relative;
-  padding: 0 var(--space-4);
-  height: 100%;
-  background: transparent;
-  color: var(--bone-300);
-  border: none;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  cursor: pointer;
-}
-.tab.active { color: var(--bone-100); }
-.tab.active::after {
-  content: ""; position: absolute; left: var(--space-4); right: var(--space-4); bottom: -1px;
-  height: 1px; background: var(--signal-300);
-  box-shadow: 0 0 8px var(--signal-300);
-}
-
 /* ---------- Typography Overrides ---------- */
 .h-display, h1.display { font-family: var(--font-display); font-weight: 500; font-size: var(--text-6xl); line-height: var(--lh-tight); letter-spacing: var(--tracking-tight); }
 h1 { font-family: var(--font-display); font-weight: 500; font-size: var(--text-4xl); line-height: var(--lh-tight); letter-spacing: var(--tracking-tight); margin: 0; }

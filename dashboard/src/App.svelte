@@ -2,7 +2,6 @@
   import { onMount } from 'svelte';
   import Sidebar from './lib/Sidebar.svelte';
   import StatusBar from './lib/StatusBar.svelte';
-  import TabBar from './lib/TabBar.svelte';
   import TopologyView from './lib/TopologyView.svelte';
   import NodeGrid from './lib/NodeGrid.svelte';
   import PacketLog from './lib/PacketLog.svelte';
@@ -136,10 +135,7 @@
   <StatusBar time={timeStr} {lastEvent} onSend={() => screen = "uplink"} nodesCount={nodes.length} />
   
   <div class="shell-main">
-    <TabBar {screen} setScreen={(s) => screen = s} nodesCount={nodes.length} />
-    
-    <div style="flex:1;min-height:0;display:flex;position:relative">
-      <div style="flex:1;min-height:0;display:flex;flex-direction:column">
+    <div style="flex:1;min-height:0;display:flex;position:relative;flex-direction:column">
         {#if screen === "topology"}
           <TopologyView {nodes} selected={selectedNode} setSelected={(n) => selectedNode = n} />
         {:else if screen === "nodes"}
@@ -149,9 +145,6 @@
         {:else if screen === "log"}
           <PacketLog entries={formattedMessages} />
         {/if}
-      </div>
-      
-      <!-- Placeholder for NodeInspector if selectedNode && screen === "topology" -->
     </div>
   </div>
 </div>
