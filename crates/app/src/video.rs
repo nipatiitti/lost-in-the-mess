@@ -16,7 +16,9 @@ pub mod platform {
         use v4l::io::traits::CaptureStream;
         use v4l::video::Capture;
 
+        let handle = tokio::runtime::Handle::current();
         std::thread::spawn(move || {
+            let _guard = handle.enter();
             info!("Starting video capture on {}", device_path);
 
             let mut dev = match Device::with_path(&device_path) {
