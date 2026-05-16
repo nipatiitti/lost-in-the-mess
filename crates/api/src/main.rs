@@ -1,17 +1,16 @@
 use axum::{
-    extract::{State, Json},
-    routing::{get, post},
     Router,
+    extract::{Json, State},
+    routing::{get, post},
 };
 use clap::Parser;
-use litm_common::{Delivery, Mesh, NodeId, NeighborInfo, SendPolicy};
-use litm_delivery::RaptorQDelivery;
-use litm_mesh::MeshService;
-use litm_transport::{derive_root_key, WifiTransport, WifiTransportConfig, RadioConfig};
+use litm_common::{NeighborInfo, NodeId};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
 use tracing::info;
+
+use app_sdk::{MessagePayload, Node, NodeBuilder};
 
 #[derive(Parser)]
 struct Cli {
@@ -25,14 +24,12 @@ struct Cli {
 
 #[derive(Clone)]
 struct AppState {
-    local_id: NodeId,
-    mesh: Arc<dyn Mesh>,
-    delivery: Arc<dyn Delivery>,
-    messages: Arc<Mutex<Vec<ReceivedMessage>>>,
+    node: Node,
+    messages: Arc<Mutex<Vec<ApiMessage>>>,
 }
 
 #[derive(Serialize, Clone)]
-struct ReceivedMessage {
+struct ApiMessage {
     id: u32,
     source: NodeId,
     text: String,
@@ -43,7 +40,7 @@ struct ReceivedMessage {
 struct GodData {
     local_id: NodeId,
     neighbors: Vec<NeighborInfo>,
-    messages: Vec<ReceivedMessage>,
+    messages: Vec<ApiMessage>,
     topology: std::collections::HashMap<NodeId, Vec<(NodeId, f32)>>,
 }
 
@@ -53,14 +50,11 @@ struct SendRequest {
 }
 
 async fn get_data(State(state): State<AppState>) -> Json<GodData> {
-    let neighbors = state.mesh.neighbors();
-    let topology = state.mesh.topology();
-    let messages = state.messages.lock().unwrap().clone();
     Json(GodData {
-        local_id: state.local_id,
-        neighbors,
-        messages,
-        topology,
+        local_id: state.node.local_id(),
+        neighbors: state.node.neighbors(),
+        topology: state.node.topology(),
+        messages: state.messages.lock().unwrap().clone(),
     })
 }
 
@@ -69,11 +63,7 @@ async fn send_message(
     Json(req): Json<SendRequest>,
 ) -> Json<serde_json::Value> {
     info!("Sending message: {}", req.text);
-    let _ = state.delivery.send_object(
-        rand::random(),
-        req.text.as_bytes().to_vec(),
-        SendPolicy::default(),
-    );
+    let _ = state.node.send(MessagePayload::Text { content: req.text });
     Json(serde_json::json!({ "status": "ok" }))
 }
 
@@ -84,54 +74,43 @@ async fn main() {
     let cli = Cli::parse();
     info!("Starting LITM API for Node {} on interface {}", cli.id, cli.iface);
 
-    let root_key = derive_root_key(&cli.password);
-    let cfg = WifiTransportConfig {
-        local_id: cli.id,
-        radio: RadioConfig {
-            iface: cli.iface,
-            ..RadioConfig::default()
-        },
-        root_key,
-    };
+    let node = NodeBuilder::new(cli.id, &cli.password, &cli.iface)
+        .build()
+        .expect("Failed to start node. Is the interface in monitor mode?");
 
-    let transport: Arc<dyn litm_common::Transport> = WifiTransport::start(cfg)
-        .expect("Failed to start transport. Is the interface in monitor mode?");
-
-    let delivery = RaptorQDelivery::new(Arc::clone(&transport));
-    let mesh = MeshService::new(
-        Arc::clone(&transport),
-        delivery.clone(),
-    );
-
-    let messages = Arc::new(Mutex::new(Vec::new()));
+    let messages = Arc::new(Mutex::new(Vec::<ApiMessage>::new()));
     let messages_clone = Arc::clone(&messages);
-    let mut delivery_rx = delivery.subscribe();
+    let mut rx = node.subscribe();
 
     tokio::spawn(async move {
-        while let Some(obj) = delivery_rx.recv().await {
-            let text = String::from_utf8_lossy(&obj.payload).to_string();
-            let mut msgs = messages_clone.lock().unwrap();
-            msgs.push(ReceivedMessage {
-                id: obj.id,
-                source: obj.source,
-                text,
-                timestamp: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
-            });
-            if msgs.len() > 50 {
-                msgs.remove(0);
+        loop {
+            match rx.recv().await {
+                Ok(msg) => {
+                    if let MessagePayload::Text { content } = msg.payload {
+                        let mut msgs = messages_clone.lock().unwrap();
+                        msgs.push(ApiMessage {
+                            id: msg.id,
+                            source: msg.source,
+                            text: content,
+                            timestamp: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_secs(),
+                        });
+                        if msgs.len() > 50 {
+                            msgs.remove(0);
+                        }
+                    }
+                }
+                Err(app_sdk::SdkError::Lagged) => {
+                    tracing::warn!("message subscriber lagged — some messages dropped");
+                }
+                Err(_) => break,
             }
         }
     });
 
-    let state = AppState {
-        local_id: cli.id,
-        mesh,
-        delivery,
-        messages,
-    };
+    let state = AppState { node, messages };
 
     let app = Router::new()
         .route("/api/data", get(get_data))
