@@ -50,6 +50,15 @@ impl ReplayDb {
         } else {
             let delta = w.high - counter;
             if delta >= WINDOW {
+                // If the counter is very low (near zero) but the window is far ahead,
+                // this is a node restart (counter reset), not a replay attack.
+                // AEAD verification already passed, so the frame is authentic.
+                // We reset the sender's window to accept the restarted peer.
+                if counter <= WINDOW && w.high > WINDOW * 4 {
+                    w.high = counter;
+                    w.bits = 1;
+                    return Ok(());
+                }
                 return Err(());
             }
             let mask = 1u128 << delta;

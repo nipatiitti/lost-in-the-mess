@@ -1,7 +1,8 @@
-use litm_common::{Delivery, Kind, Mesh, NeighborInfo, NodeId, ObjectBitmap, Transport};
+use litm_common::{Delivery, Epoch, Kind, Mesh, NeighborInfo, NodeId, ObjectBitmap, Transport};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -82,8 +83,7 @@ impl MeshService {
             loop {
                 interval.tick().await;
                 if Instant::now() >= next_beacon {
-                    // TODO: use transport epoch when the Transport trait exposes it
-                    let epoch = 0u32;
+                    let epoch = current_epoch();
 
                     let neighbors_heard = {
                         let table = neighbor_table.read().unwrap();
@@ -275,14 +275,19 @@ impl MeshService {
                         let delay = rand::thread_rng().gen_range(0..=50);
                         tokio::time::sleep(Duration::from_millis(delay)).await;
 
-                        let count = hashes_clone
-                            .read()
-                            .unwrap()
-                            .get(&hash)
-                            .map(|(c, _)| *c)
-                            .unwrap_or(0);
+                        let should_forward = {
+                            let lock = hashes_clone.read().unwrap();
+                            lock.get(&hash).map(|(c, _)| *c).unwrap_or(0) < 2
+                        };
 
-                        if count < 2 {
+                        if should_forward {
+                            // Pre-mark as already forwarded so the echo of our own
+                            // re-broadcast doesn't trigger another forward cycle.
+                            hashes_clone
+                                .write()
+                                .unwrap()
+                                .entry(hash)
+                                .and_modify(|e| e.0 = 2);
                             let _ = t_transport_clone.broadcast(kind, &payload_clone);
                         }
                     });
@@ -290,6 +295,14 @@ impl MeshService {
             }
         });
     }
+}
+
+fn current_epoch() -> Epoch {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    (secs / 60) as Epoch
 }
 
 impl Mesh for MeshService {
