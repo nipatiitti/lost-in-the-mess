@@ -97,8 +97,8 @@ impl MeshService {
         neighbor_table: Arc<RwLock<HashMap<NodeId, NeighborState>>>,
     ) {
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(50));
-            let mut next_beacon = Instant::now() + Duration::from_millis(500);
+            let mut interval = tokio::time::interval(Duration::from_millis(20));
+            let mut next_beacon = Instant::now() + Duration::from_millis(100);
             let mut beacon_seq: u32 = 0;
 
             loop {
@@ -131,7 +131,7 @@ impl MeshService {
                     }
 
                     beacon_seq = beacon_seq.wrapping_add(1);
-                    let jitter = rand::thread_rng().gen_range(450..=550);
+                    let jitter = rand::thread_rng().gen_range(90..=110);
                     next_beacon = Instant::now() + Duration::from_millis(jitter);
                 }
             }
@@ -236,15 +236,15 @@ impl MeshService {
         link_state: Arc<RwLock<HashMap<NodeId, Vec<(NodeId, u8)>>>>,
     ) {
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(500));
+            let mut interval = tokio::time::interval(Duration::from_millis(100));
             loop {
                 interval.tick().await;
                 let now = Instant::now();
                 let mut table = neighbor_table.write().unwrap();
                 table.retain(|id, state| {
-                    let alive = now.duration_since(state.last_seen) <= Duration::from_millis(4500);
+                    let alive = now.duration_since(state.last_seen) <= Duration::from_millis(450);
                     if !alive {
-                        tracing::info!(peer = id, "neighbor evicted (no beacon for 4.5 s)");
+                        tracing::info!(peer = id, "neighbor evicted (no beacon for 450 ms)");
                     }
                     alive
                 });
