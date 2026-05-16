@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use app_sdk::{MessagePayload, Node};
 use chrono::{DateTime, Local};
@@ -22,6 +22,12 @@ pub struct MessageEntry {
     pub content: String,
 }
 
+pub struct EventEntry {
+    pub at: DateTime<Local>,
+    pub text: String,
+    pub is_warning: bool,
+}
+
 pub struct App {
     pub local_id: NodeId,
     pub node: Node,
@@ -37,7 +43,10 @@ pub struct App {
     pub streaming: bool,
     pub local_preview: Option<image::DynamicImage>,
     pub stream_frames_sent: u64,
+    pub events: Vec<EventEntry>,
+    pub objects_received: u64,
     cam_cmd_tx: mpsc::Sender<bool>,
+    prev_neighbor_ids: HashSet<NodeId>,
 }
 
 impl App {
@@ -57,19 +66,48 @@ impl App {
             streaming: false,
             local_preview: None,
             stream_frames_sent: 0,
+            events: Vec::new(),
+            objects_received: 0,
             cam_cmd_tx,
+            prev_neighbor_ids: HashSet::new(),
+        }
+    }
+
+    fn push_event(&mut self, text: String, is_warning: bool) {
+        self.events.push(EventEntry { at: Local::now(), text, is_warning });
+        if self.events.len() > 200 {
+            self.events.drain(..self.events.len() - 200);
         }
     }
 
     pub fn handle_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::TopologyTick => {
-                self.neighbors = self.node.neighbors();
+                let new_neighbors = self.node.neighbors();
+                let new_ids: HashSet<NodeId> = new_neighbors.iter().map(|n| n.id).collect();
+
+                let joined: Vec<NodeId> = new_ids.iter()
+                    .filter(|id| !self.prev_neighbor_ids.contains(id))
+                    .copied().collect();
+                let left: Vec<NodeId> = self.prev_neighbor_ids.iter()
+                    .filter(|id| !new_ids.contains(id))
+                    .copied().collect();
+
+                for id in joined {
+                    self.push_event(format!("Node {} joined", id), false);
+                }
+                for id in left {
+                    self.push_event(format!("Node {} left", id), true);
+                }
+                self.prev_neighbor_ids = new_ids;
+
+                self.neighbors = new_neighbors;
                 self.neighbors.sort_by_key(|n| n.id);
                 self.topology = self.node.topology();
             }
 
             AppEvent::MeshMessage { source, content } => {
+                self.objects_received += 1;
                 self.messages.push(MessageEntry {
                     received_at: Local::now(),
                     source,

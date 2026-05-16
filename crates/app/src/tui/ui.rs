@@ -7,6 +7,12 @@ use ratatui::{
 };
 use ratatui_image::{StatefulImage, protocol::StatefulProtocol};
 
+fn prr_color(prr: f32) -> Color {
+    if prr >= 0.7 { Color::Green }
+    else if prr >= 0.4 { Color::Yellow }
+    else { Color::Red }
+}
+
 use super::app::{ActivePanel, App};
 
 pub fn render(
@@ -40,10 +46,33 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
     let highlight = Style::default().add_modifier(Modifier::REVERSED);
     let normal = Style::default();
 
+    let avg_prr = if app.neighbors.is_empty() {
+        0.0f32
+    } else {
+        app.neighbors.iter().map(|n| n.prr).sum::<f32>() / app.neighbors.len() as f32
+    };
+    let (health_label, health_color) = if app.neighbors.is_empty() {
+        ("ISOLATED", Color::Red)
+    } else if avg_prr >= 0.7 {
+        ("MESH OK", Color::Green)
+    } else if avg_prr >= 0.4 {
+        ("DEGRADED", Color::Yellow)
+    } else {
+        ("CRITICAL", Color::Red)
+    };
+
     let mut spans = vec![
         Span::styled(
             format!(" Node {} ", app.local_id),
             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {} ", health_label),
+            Style::default().fg(health_color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {}n  obj:{} ", app.neighbors.len(), app.objects_received),
+            Style::default().fg(Color::DarkGray),
         ),
         Span::raw("  "),
     ];
@@ -70,7 +99,8 @@ fn render_neighbors(f: &mut Frame, area: Rect, app: &App) {
     let rows: Vec<Row> = app.neighbors.iter().map(|n| {
         Row::new([
             Cell::from(n.id.to_string()),
-            Cell::from(format!("{:.0}%", n.prr * 100.0)),
+            Cell::from(format!("{:.0}%", n.prr * 100.0))
+                .style(Style::default().fg(prr_color(n.prr))),
             Cell::from(format!("{}dBm", n.rssi_dbm)),
         ])
     }).collect();
@@ -89,6 +119,12 @@ fn render_neighbors(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_topology(f: &mut Frame, area: Rect, app: &App) {
+    let split = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(7)])
+        .split(area);
+
+    // --- topology edges ---
     let mut edges: Vec<ListItem> = Vec::new();
     let mut sorted_keys: Vec<_> = app.topology.keys().copied().collect();
     sorted_keys.sort();
@@ -98,23 +134,44 @@ fn render_topology(f: &mut Frame, area: Rect, app: &App) {
             let mut dests = dests.clone();
             dests.sort_by_key(|(id, _)| *id);
             for (dst, prr) in dests {
-                let style = if src == app.local_id || dst == app.local_id {
-                    Style::default().fg(Color::Cyan)
+                let is_local = src == app.local_id || dst == app.local_id;
+                let prr_col = prr_color(prr);
+                let node_style = if is_local {
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
                 };
-                edges.push(ListItem::new(Line::from(Span::styled(
-                    format!("{src} → {dst}  ({:.0}%)", prr * 100.0),
-                    style,
-                ))));
+                let prr_style = Style::default().fg(prr_col);
+                edges.push(ListItem::new(Line::from(vec![
+                    Span::styled(format!("{src} → {dst}  "), node_style),
+                    Span::styled(format!("{:.0}%", prr * 100.0), prr_style),
+                ])));
             }
         }
     }
 
     let list = List::new(edges)
         .block(Block::default().borders(Borders::ALL).title(" Mesh Topology "));
+    f.render_widget(list, split[0]);
 
-    f.render_widget(list, area);
+    // --- event log ---
+    let visible_rows = split[1].height.saturating_sub(2) as usize;
+    let skip = app.events.len().saturating_sub(visible_rows);
+    let event_lines: Vec<Line> = app.events.iter().skip(skip).map(|e| {
+        let color = if e.is_warning { Color::Yellow } else { Color::Green };
+        Line::from(vec![
+            Span::styled(
+                e.at.format("%H:%M:%S").to_string(),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::raw("  "),
+            Span::styled(e.text.clone(), Style::default().fg(color)),
+        ])
+    }).collect();
+
+    let log = Paragraph::new(Text::from(event_lines))
+        .block(Block::default().borders(Borders::ALL).title(" Network Events "));
+    f.render_widget(log, split[1]);
 }
 
 fn render_messages_compose(f: &mut Frame, area: Rect, app: &App) {
@@ -128,8 +185,12 @@ fn render_messages_compose(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_messages(f: &mut Frame, area: Rect, app: &App) {
+    let direct_ids: std::collections::HashSet<litm_common::NodeId> =
+        app.neighbors.iter().map(|n| n.id).collect();
+
     let lines: Vec<Line> = app.messages.iter().map(|m| {
-        Line::from(vec![
+        let is_relay = !direct_ids.contains(&m.source);
+        let mut spans = vec![
             Span::styled(
                 m.received_at.format("%H:%M:%S").to_string(),
                 Style::default().fg(Color::DarkGray),
@@ -139,9 +200,16 @@ fn render_messages(f: &mut Frame, area: Rect, app: &App) {
                 format!("from:{}", m.source),
                 Style::default().fg(Color::Yellow),
             ),
-            Span::raw("  "),
-            Span::raw(m.content.clone()),
-        ])
+        ];
+        if is_relay {
+            spans.push(Span::styled(
+                " ↻relay",
+                Style::default().fg(Color::Magenta),
+            ));
+        }
+        spans.push(Span::raw("  "));
+        spans.push(Span::raw(m.content.clone()));
+        Line::from(spans)
     }).collect();
 
     let scroll = app.messages_scroll as u16;
