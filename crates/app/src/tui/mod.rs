@@ -105,6 +105,7 @@ pub async fn run(id: NodeId, password: &str, iface: &str) -> anyhow::Result<()> 
 
     let mut app = App::new(id, node.clone(), cam_cmd_tx);
     let mut mesh_rx = node.subscribe();
+    let mut telemetry_rx = node.subscribe_telemetry();
     let mut term_events = EventStream::new();
     let mut topo_tick = tokio::time::interval(Duration::from_secs(1));
 
@@ -139,6 +140,10 @@ pub async fn run(id: NodeId, password: &str, iface: &str) -> anyhow::Result<()> 
                     local_preview_proto = Some(picker.new_resize_protocol(img.clone()));
                     AppEvent::LocalPreview(img)
                 }
+                None => continue,
+            },
+            telemetry = telemetry_rx.recv() => match telemetry {
+                Some(event) => AppEvent::RaptorTelemetry(event),
                 None => continue,
             },
             _ = topo_tick.tick() => AppEvent::TopologyTick,

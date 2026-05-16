@@ -17,4 +17,5 @@ pub enum AppEvent {
     MeshClosed,
     VideoFrame(DecodedVideoFrame),
     LocalPreview(image::DynamicImage),
+    RaptorTelemetry(litm_common::RaptorEvent),
 }

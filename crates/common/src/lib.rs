@@ -109,6 +109,16 @@ pub struct DeliveredObject {
     pub payload: Vec<u8>,
 }
 
+#[derive(serde::Serialize, Clone, Debug)]
+#[serde(tag = "type", content = "data")]
+pub enum RaptorEvent {
+    PacketReceived { id: u32, is_repair: bool, source_block: u32 },
+    DecoderStatus { progress: f32, overhead_symbols: u32 },
+    MatrixState { rows: usize, cols: usize, density: f32 },
+    DecodingSuccess,
+    DecodingFailed,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NeighborInfo {
     pub id: NodeId,
@@ -140,6 +150,9 @@ pub trait Delivery: Send + Sync + 'static {
     fn subscribe(&self) -> mpsc::Receiver<DeliveredObject>;
     fn decoded_bitmap(&self) -> ObjectBitmap;
     fn note_peer_coverage(&self, peer: NodeId, bitmap: ObjectBitmap);
+    fn subscribe_telemetry(&self) -> mpsc::Receiver<RaptorEvent> {
+        mpsc::channel(1).1 // Default empty receiver
+    }
 }
 
 /// Person C (mesh crate) implements this.

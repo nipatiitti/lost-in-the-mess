@@ -39,6 +39,7 @@ pub fn render(
         ActivePanel::Topology => render_topology(f, cols[1], app),
         ActivePanel::Messages => render_messages_compose(f, cols[1], app),
         ActivePanel::Video => render_video(f, cols[1], app, local_preview_proto, remote_video_proto),
+        ActivePanel::Telemetry => render_telemetry(f, cols[1], app),
     }
 }
 
@@ -81,6 +82,7 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
         ("Topology", ActivePanel::Topology),
         ("Messages", ActivePanel::Messages),
         ("Video",    ActivePanel::Video),
+        ("Telemetry", ActivePanel::Telemetry),
     ] {
         let style = if app.active_panel == panel { highlight } else { normal };
         spans.push(Span::styled(format!(" {label} "), style));
@@ -317,4 +319,48 @@ fn render_local_camera(f: &mut Frame, area: Rect, app: &App, local_preview_proto
             inner,
         );
     }
+}
+
+fn render_telemetry(f: &mut Frame, area: Rect, app: &App) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" RaptorQ Fountain Decoder Telemetry ");
+    
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Length(5),
+            Constraint::Min(0)
+        ])
+        .split(inner);
+
+    let progress_pct = (app.raptor_progress * 100.0) as u16;
+    let gauge = ratatui::widgets::Gauge::default()
+        .block(Block::default().title(" Matrix Assembly Progress ").borders(Borders::ALL))
+        .gauge_style(Style::default().fg(Color::Green).bg(Color::DarkGray))
+        .percent(progress_pct);
+    f.render_widget(gauge, chunks[0]);
+    
+    let stats = vec![
+        Line::from(vec![
+            Span::styled("Matrix Density: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{:.1}%", app.raptor_density * 100.0), Style::default().fg(Color::Cyan)),
+        ]),
+        Line::from(vec![
+            Span::styled("Overhead Symbols: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}", app.raptor_overhead), Style::default().fg(Color::Yellow)),
+        ]),
+        Line::from(vec![
+            Span::styled("Matrix Dimensions: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}x{}", app.raptor_matrix_rows, app.raptor_matrix_cols), Style::default().fg(Color::Magenta)),
+        ]),
+    ];
+    
+    let para = Paragraph::new(stats)
+        .block(Block::default().borders(Borders::ALL).title(" Statistics "));
+    f.render_widget(para, chunks[1]);
 }

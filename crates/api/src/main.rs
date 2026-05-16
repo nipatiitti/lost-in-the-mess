@@ -1,6 +1,6 @@
 use axum::{
     Router,
-    extract::{Json, State, Path},
+    extract::{Json, State, Path, ws::{WebSocketUpgrade, WebSocket, Message}},
     routing::{get, post},
     response::IntoResponse,
     body::Body,
@@ -187,6 +187,22 @@ async fn get_video_stream(
     }
 }
 
+async fn raptor_ws_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let mut rx = state.node.subscribe_telemetry();
+    ws.on_upgrade(move |mut socket: WebSocket| async move {
+        while let Some(event) = rx.recv().await {
+            if let Ok(json) = serde_json::to_string(&event) {
+                if socket.send(Message::Text(json.into())).await.is_err() {
+                    break;
+                }
+            }
+        }
+    })
+}
+
 fn parse_data_uri(uri: &str) -> Option<(String, Vec<u8>)> {
     if !uri.starts_with("data:") { return None; }
     let comma_idx = uri.find(',')?;
@@ -302,6 +318,7 @@ async fn main() {
         .route("/api/send", post(send_message))
         .route("/api/video/frame", post(send_video_frame))
         .route("/api/video/stream/:id", get(get_video_stream))
+        .route("/api/raptor/ws", get(raptor_ws_handler))
         .layer(CorsLayer::permissive())
         .with_state(state);
 

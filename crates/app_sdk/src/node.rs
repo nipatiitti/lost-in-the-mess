@@ -84,6 +84,11 @@ impl Node {
         MessageReceiver { inner: self.tx.subscribe() }
     }
 
+    /// Subscribe to real-time telemetry events for the RaptorQ delivery engine.
+    pub fn subscribe_telemetry(&self) -> tokio::sync::mpsc::Receiver<litm_common::RaptorEvent> {
+        self.delivery.subscribe_telemetry()
+    }
+
     // --- mesh queries ---
 
     pub fn neighbors(&self) -> Vec<NeighborInfo> {

@@ -14,6 +14,7 @@ pub enum ActivePanel {
     Topology,
     Messages,
     Video,
+    Telemetry,
 }
 
 pub struct MessageEntry {
@@ -45,6 +46,11 @@ pub struct App {
     pub stream_frames_sent: u64,
     pub events: Vec<EventEntry>,
     pub objects_received: u64,
+    pub raptor_progress: f32,
+    pub raptor_overhead: u32,
+    pub raptor_matrix_rows: usize,
+    pub raptor_matrix_cols: usize,
+    pub raptor_density: f32,
     cam_cmd_tx: mpsc::Sender<bool>,
     prev_neighbor_ids: HashSet<NodeId>,
 }
@@ -68,6 +74,11 @@ impl App {
             stream_frames_sent: 0,
             events: Vec::new(),
             objects_received: 0,
+            raptor_progress: 0.0,
+            raptor_overhead: 0,
+            raptor_matrix_rows: 0,
+            raptor_matrix_cols: 0,
+            raptor_density: 0.0,
             cam_cmd_tx,
             prev_neighbor_ids: HashSet::new(),
         }
@@ -131,6 +142,24 @@ impl App {
                 self.should_quit = true;
             }
 
+            AppEvent::RaptorTelemetry(telemetry) => {
+                match telemetry {
+                    litm_common::RaptorEvent::DecoderStatus { progress, overhead_symbols } => {
+                        self.raptor_progress = progress;
+                        self.raptor_overhead = overhead_symbols;
+                    }
+                    litm_common::RaptorEvent::MatrixState { rows, cols, density } => {
+                        self.raptor_matrix_rows = rows;
+                        self.raptor_matrix_cols = cols;
+                        self.raptor_density = density;
+                    }
+                    litm_common::RaptorEvent::DecodingSuccess => {
+                        self.raptor_progress = 1.0;
+                    }
+                    _ => {}
+                }
+            }
+
             AppEvent::Terminal(Event::Key(key)) => self.handle_key(key),
 
             AppEvent::Terminal(_) => {}
@@ -138,7 +167,7 @@ impl App {
     }
 
     fn cycle_panel(&mut self, dir: i8) {
-        let panels = [ActivePanel::Topology, ActivePanel::Messages, ActivePanel::Video];
+        let panels = [ActivePanel::Topology, ActivePanel::Messages, ActivePanel::Video, ActivePanel::Telemetry];
         let idx = panels.iter().position(|p| *p == self.active_panel).unwrap_or(0);
         let next = (idx as i8 + dir).rem_euclid(panels.len() as i8) as usize;
         self.active_panel = panels[next];

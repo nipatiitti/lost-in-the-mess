@@ -9,7 +9,7 @@ use raptorq::{Decoder, Encoder, EncodingPacket, ObjectTransmissionInformation, P
 
 use crate::frame::FecFrame;
 use litm_common::{
-    DeliveredObject, Delivery, Kind, NodeId, ObjectBitmap, ObjectId, Result, SendPolicy, Transport,
+    DeliveredObject, Delivery, Kind, NodeId, ObjectBitmap, ObjectId, Result, SendPolicy, Transport, RaptorEvent
 };
 
 /// Bounded set of recently-completed object IDs. O(1) lookup, O(1) eviction.
@@ -43,8 +43,9 @@ impl CompletedSet {
 pub struct RaptorQDelivery<T: Transport + ?Sized> {
     transport: Arc<T>,
     subscribers: Arc<Mutex<Vec<mpsc::Sender<DeliveredObject>>>>,
-    /// Value is (decoder, time of last packet received for this object).
-    decoders: Arc<Mutex<HashMap<ObjectId, (Decoder, Instant)>>>,
+    telemetry_subscribers: Arc<Mutex<Vec<mpsc::Sender<RaptorEvent>>>>,
+    /// Value is (decoder, time of last packet received for this object, packets_received, k_symbols).
+    decoders: Arc<Mutex<HashMap<ObjectId, (Decoder, Instant, u32, u32)>>>,
     completed_objects: Arc<Mutex<CompletedSet>>,
     peer_coverage: Arc<Mutex<HashMap<NodeId, ObjectBitmap>>>,
     local_bitmap: Arc<Mutex<ObjectBitmap>>,
@@ -60,6 +61,7 @@ impl<T: Transport + 'static + ?Sized> RaptorQDelivery<T> {
         let delivery = Arc::new(Self {
             transport: transport.clone(),
             subscribers: Arc::new(Mutex::new(Vec::new())),
+            telemetry_subscribers: Arc::new(Mutex::new(Vec::new())),
             decoders: Arc::new(Mutex::new(HashMap::new())),
             completed_objects: Arc::new(Mutex::new(CompletedSet::new(COMPLETED_CAP))),
             peer_coverage: Arc::new(Mutex::new(HashMap::new())),
@@ -81,7 +83,7 @@ impl<T: Transport + 'static + ?Sized> RaptorQDelivery<T> {
             loop {
                 interval.tick().await;
                 let cutoff = Instant::now() - Duration::from_secs(DECODER_STALE_SECS);
-                decoders_ref.lock().unwrap().retain(|_, (_, last_seen)| *last_seen > cutoff);
+                decoders_ref.lock().unwrap().retain(|_, (_, last_seen, _, _)| *last_seen > cutoff);
             }
         });
 
@@ -98,19 +100,47 @@ impl<T: Transport + 'static + ?Sized> RaptorQDelivery<T> {
             }
 
             let mut decoders = self.decoders.lock().unwrap();
-            let (decoder, last_seen) = decoders.entry(frame.object_id).or_insert_with(|| {
+            let mut emit_events = Vec::new();
+
+            let (decoder, last_seen, packets_received, k) = decoders.entry(frame.object_id).or_insert_with(|| {
                 let mut tl_bytes = [0u8; 8];
                 tl_bytes.copy_from_slice(&frame.oti[0..8]);
                 let transfer_length = u64::from_be_bytes(tl_bytes);
+                let k = (transfer_length as f64 / frame.sym_sz as f64).ceil() as u32;
                 (
                     Decoder::new(ObjectTransmissionInformation::with_defaults(
                         transfer_length,
                         frame.sym_sz,
                     )),
                     Instant::now(),
+                    0,
+                    k,
                 )
             });
             *last_seen = Instant::now();
+            *packets_received += 1;
+            
+            let is_repair = frame.esi >= *k;
+            emit_events.push(RaptorEvent::PacketReceived {
+                id: frame.object_id,
+                is_repair,
+                source_block: frame.block as u32,
+            });
+            
+            let progress = (*packets_received as f32 / *k as f32).min(1.0);
+            let overhead = if *packets_received > *k { *packets_received - *k } else { 0 };
+            
+            emit_events.push(RaptorEvent::DecoderStatus {
+                progress,
+                overhead_symbols: overhead,
+            });
+            
+            // Faked matrix density for visualization purposes
+            emit_events.push(RaptorEvent::MatrixState {
+                rows: *k as usize,
+                cols: *k as usize,
+                density: progress, // Simplification for visual density
+            });
 
             let payload_id = PayloadId::new(frame.block, frame.esi);
             let packet = EncodingPacket::new(payload_id, frame.payload);
@@ -118,6 +148,8 @@ impl<T: Transport + 'static + ?Sized> RaptorQDelivery<T> {
             if let Some(decoded_payload) = decoder.decode(packet) {
                 decoders.remove(&frame.object_id);
                 drop(decoders);
+                
+                emit_events.push(RaptorEvent::DecodingSuccess);
 
                 self.completed_objects.lock().unwrap().insert(frame.object_id);
                 self.local_bitmap.lock().unwrap().set(frame.object_id);
@@ -131,7 +163,22 @@ impl<T: Transport + 'static + ?Sized> RaptorQDelivery<T> {
                     })
                     .is_ok()
                 });
+            } else {
+                drop(decoders);
             }
+            
+            // Emit collected events
+            let mut telemetry = self.telemetry_subscribers.lock().unwrap();
+            telemetry.retain(|tx| {
+                let mut ok = true;
+                for event in &emit_events {
+                    if tx.try_send(event.clone()).is_err() {
+                        ok = false;
+                        break;
+                    }
+                }
+                ok
+            });
         }
     }
 }
@@ -186,6 +233,12 @@ impl<T: Transport + 'static + ?Sized> Delivery for RaptorQDelivery<T> {
     fn subscribe(&self) -> mpsc::Receiver<DeliveredObject> {
         let (tx, rx) = mpsc::channel(512);
         self.subscribers.lock().unwrap().push(tx);
+        rx
+    }
+    
+    fn subscribe_telemetry(&self) -> mpsc::Receiver<RaptorEvent> {
+        let (tx, rx) = mpsc::channel(512);
+        self.telemetry_subscribers.lock().unwrap().push(tx);
         rx
     }
 
