@@ -17,11 +17,6 @@ pub fn broadcast() -> SendPolicy {
     SendPolicy { desired_coverage: 255, ttl: Duration::from_secs(60), priority: 255 }
 }
 
-/// Brief TTL for video frames; one missed frame is acceptable.
-pub fn video_frame() -> SendPolicy {
-    SendPolicy { desired_coverage: 1, ttl: Duration::from_millis(1500), priority: 64 }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -38,17 +33,10 @@ mod tests {
     }
 
     #[test]
-    fn video_frame_shortest_ttl() {
-        assert!(video_frame().ttl < best_effort().ttl);
-        assert!(video_frame().ttl < reliable().ttl);
-    }
-
-    #[test]
     fn no_zero_coverage() {
         // desired_coverage=0 is a footgun in RaptorQDelivery — none of our presets use it
         assert!(reliable().desired_coverage > 0);
         assert!(best_effort().desired_coverage > 0);
         assert!(broadcast().desired_coverage > 0);
-        assert!(video_frame().desired_coverage > 0);
     }
 }

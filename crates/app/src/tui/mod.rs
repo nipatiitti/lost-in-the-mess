@@ -4,9 +4,10 @@ mod events;
 mod ui;
 
 use std::io::stdout;
+use std::sync::Arc;
 use std::time::Duration;
 
-use app_sdk::{MessagePayload, NodeBuilder, ReceivedMessage, SdkError, VideoCodec};
+use app_sdk::{MessagePayload, NodeBuilder, ReceivedMessage, SdkError, VideoChannel, VideoQuality};
 use crossterm::{
     event::EventStream,
     execute,
@@ -16,7 +17,7 @@ use futures::StreamExt;
 use image::DynamicImage;
 use litm_common::NodeId;
 use ratatui::{Terminal, backend::CrosstermBackend};
-use ratatui_image::picker::Picker;
+use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use tokio::sync::mpsc;
 
 use app::App;
@@ -41,14 +42,65 @@ pub async fn run(id: NodeId, password: &str, iface: &str) -> anyhow::Result<()> 
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let mut picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
+    let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
+
+    // Video channel: bypasses FEC/delivery, goes straight to transport.
+    let video_ch = VideoChannel::new(node.transport());
 
     let (cam_cmd_tx, cam_cmd_rx) = mpsc::channel::<bool>(4);
-    let (preview_tx, mut preview_rx) = mpsc::channel::<DynamicImage>(2);
+    let (preview_raw_tx, mut preview_raw_rx) = mpsc::channel::<Vec<u8>>(2);
+    let (preview_decoded_tx, mut preview_decoded_rx) = mpsc::channel::<DynamicImage>(2);
 
-    let node_for_cam = node.clone();
+    // Camera capture runs in a blocking thread; it writes JPEG into VideoChannel.
+    let video_ch_for_cam = Arc::clone(&video_ch);
+    let rt_handle = tokio::runtime::Handle::current();
     std::thread::spawn(move || {
-        camera::run_capture(node_for_cam, cam_cmd_rx, preview_tx);
+        let _guard = rt_handle.enter();
+        camera::run_capture(video_ch_for_cam, VideoQuality::Balanced, cam_cmd_rx, preview_raw_tx);
+    });
+
+    // Decode local camera preview for the bottom half of the Video panel.
+    tokio::spawn(async move {
+        while let Some(jpeg) = preview_raw_rx.recv().await {
+            let result = tokio::task::spawn_blocking(move || {
+                image::load_from_memory_with_format(&jpeg, image::ImageFormat::Jpeg)
+                    .ok()
+                    .map(|img| img.thumbnail(480, 480))
+            })
+            .await;
+            if let Ok(Some(img)) = result {
+                let _ = preview_decoded_tx.try_send(img);
+            }
+        }
+    });
+
+    // Subscribe to the video channel for frames arriving from remote nodes.
+    let mut video_frame_rx = video_ch.subscribe();
+    let (video_decoded_tx, mut video_decoded_rx) = mpsc::channel::<DecodedVideoFrame>(1);
+
+    tokio::spawn(async move {
+        while let Some(frame) = video_frame_rx.recv().await {
+            let source = frame.source;
+            let frame_id = frame.frame_id;
+            let chunks_received = frame.chunks_received;
+            let chunks_total = frame.chunks_total;
+            let jpeg = frame.jpeg_bytes;
+            let result = tokio::task::spawn_blocking(move || {
+                image::load_from_memory_with_format(&jpeg, image::ImageFormat::Jpeg)
+                    .ok()
+                    .map(|img| DecodedVideoFrame {
+                        source,
+                        frame_id,
+                        image: img.thumbnail(480, 480),
+                        chunks_received,
+                        chunks_total,
+                    })
+            })
+            .await;
+            if let Ok(Some(decoded)) = result {
+                let _ = video_decoded_tx.try_send(decoded);
+            }
+        }
     });
 
     let mut app = App::new(id, node.clone(), cam_cmd_tx);
@@ -56,8 +108,11 @@ pub async fn run(id: NodeId, password: &str, iface: &str) -> anyhow::Result<()> 
     let mut term_events = EventStream::new();
     let mut topo_tick = tokio::time::interval(Duration::from_secs(1));
 
+    let mut local_preview_proto: Option<StatefulProtocol> = None;
+    let mut remote_video_proto: Option<StatefulProtocol> = None;
+
     loop {
-        terminal.draw(|f| ui::render(f, &app, &mut picker))?;
+        terminal.draw(|f| ui::render(f, &app, &mut local_preview_proto, &mut remote_video_proto))?;
 
         let event = tokio::select! {
             maybe = term_events.next() => match maybe {
@@ -65,26 +120,6 @@ pub async fn run(id: NodeId, password: &str, iface: &str) -> anyhow::Result<()> 
                 _ => break,
             },
             msg = mesh_rx.recv() => match msg {
-                Ok(ReceivedMessage {
-                    source,
-                    payload: MessagePayload::VideoFrame { seq, width, height, codec, data },
-                    ..
-                }) => {
-                    let decoded: Option<DynamicImage> = match codec {
-                        VideoCodec::Mjpeg => {
-                            image::load_from_memory_with_format(&data, image::ImageFormat::Jpeg).ok()
-                        }
-                        VideoCodec::Raw => {
-                            image::RgbImage::from_raw(width as u32, height as u32, data)
-                                .map(DynamicImage::ImageRgb8)
-                        }
-                        VideoCodec::H264 => None,
-                    };
-                    match decoded {
-                        Some(img) => AppEvent::VideoFrame(DecodedVideoFrame { source, seq, image: img }),
-                        None => continue,
-                    }
-                }
                 Ok(ReceivedMessage { source, payload: MessagePayload::Text { content }, .. }) => {
                     AppEvent::MeshMessage { source, content }
                 }
@@ -92,8 +127,18 @@ pub async fn run(id: NodeId, password: &str, iface: &str) -> anyhow::Result<()> 
                 Err(SdkError::Lagged) => continue,
                 Err(_) => AppEvent::MeshClosed,
             },
-            maybe_preview = preview_rx.recv() => match maybe_preview {
-                Some(img) => AppEvent::LocalPreview(img),
+            maybe_decoded = video_decoded_rx.recv() => match maybe_decoded {
+                Some(frame) => {
+                    remote_video_proto = Some(picker.new_resize_protocol(frame.image.clone()));
+                    AppEvent::VideoFrame(frame)
+                }
+                None => continue,
+            },
+            maybe_preview = preview_decoded_rx.recv() => match maybe_preview {
+                Some(img) => {
+                    local_preview_proto = Some(picker.new_resize_protocol(img.clone()));
+                    AppEvent::LocalPreview(img)
+                }
                 None => continue,
             },
             _ = topo_tick.tick() => AppEvent::TopologyTick,

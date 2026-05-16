@@ -6,18 +6,10 @@ use crate::error::{Result, SdkError};
 pub const SDK_ENVELOPE_VERSION: u8 = 0x01;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum VideoCodec {
-    Mjpeg,
-    H264,
-    Raw,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum MessagePayload {
     Text { content: String },
     File { name: String, bytes: Vec<u8> },
     Image { mime: String, bytes: Vec<u8> },
-    VideoFrame { seq: u32, width: u16, height: u16, codec: VideoCodec, data: Vec<u8> },
     /// Escape hatch for application-specific types not yet in the enum.
     Custom { tag: String, bytes: Vec<u8> },
 }
@@ -34,8 +26,7 @@ pub fn encode_message(payload: &MessagePayload) -> Result<Vec<u8>> {
         MessagePayload::Text { .. } => 0,
         MessagePayload::File { .. } => 1,
         MessagePayload::Image { .. } => 2,
-        MessagePayload::VideoFrame { .. } => 3,
-        MessagePayload::Custom { .. } => 4,
+        MessagePayload::Custom { .. } => 3,
     };
     let mut out = vec![SDK_ENVELOPE_VERSION, kind_byte];
     let body = postcard::to_allocvec(payload).map_err(|e| SdkError::Serde(e.to_string()))?;
@@ -71,20 +62,6 @@ mod tests {
     fn file_roundtrip() {
         let msg = MessagePayload::File { name: "data.bin".into(), bytes: vec![1, 2, 3, 4] };
         let bytes = encode_message(&msg).unwrap();
-        assert_eq!(decode_message(&bytes).unwrap(), msg);
-    }
-
-    #[test]
-    fn video_frame_roundtrip() {
-        let msg = MessagePayload::VideoFrame {
-            seq: 42,
-            width: 640,
-            height: 480,
-            codec: VideoCodec::Mjpeg,
-            data: vec![0xFF, 0xD8],
-        };
-        let bytes = encode_message(&msg).unwrap();
-        assert_eq!(bytes[1], 3); // VideoFrame kind byte
         assert_eq!(decode_message(&bytes).unwrap(), msg);
     }
 

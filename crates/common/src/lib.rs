@@ -47,6 +47,7 @@ pub enum Kind {
     Beacon = 0,  // mesh -> mesh
     Fec = 1,     // delivery -> delivery
     Control = 2, // app -> app (rekey, eviction, debug)
+    Video = 3,   // unreliable video bypass — no FEC, no ACK, fire-and-forget
 }
 
 // ---------- Per-packet metadata ----------

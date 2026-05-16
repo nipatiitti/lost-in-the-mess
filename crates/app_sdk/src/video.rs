@@ -1,136 +1,212 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicU32, Ordering},
-};
+//! Unreliable video bypass lane: Kind::Video, no FEC, no ACK, fire-and-forget.
+//!
+//! Each JPEG frame is sliced into ≤1391-byte chunks. Every chunk is an
+//! independent encrypted broadcast. The receiver reassembles chunks by
+//! frame_id; incomplete frames are silently discarded and the last good
+//! frame is held in the TUI.
 
-use litm_common::ObjectId;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 
-use crate::error::Result;
-use crate::message::{MessagePayload, VideoCodec};
-use crate::node::{MessageReceiver, Node};
-use crate::policy;
+use image::ImageEncoder;
+use image::codecs::jpeg::JpegEncoder;
+use image::imageops::FilterType;
+use litm_common::{Kind, NodeId, Transport};
+use tokio::sync::mpsc;
 
-/// Sends video frames through a `Node`. Does not own a capture loop — that
-/// stays in the platform-specific layer (e.g. `litm-app/video.rs`).
+// MAX_PLAINTEXT(1400) - kind(1) - payload_len(2) - chunk_header(6) = 1391
+const CHUNK_DATA: usize = 1391;
+// frame_id(4) + chunk_idx(1) + total_chunks(1)
+const HDR: usize = 6;
+
+// ── Public types ──────────────────────────────────────────────────────────────
+
+/// A fully reassembled video frame received from a remote node.
+#[derive(Clone)]
+pub struct VideoFrame {
+    pub frame_id: u32,
+    pub source: NodeId,
+    pub jpeg_bytes: Vec<u8>,
+    /// How many chunks arrived vs. how many were expected (for loss display).
+    pub chunks_received: u8,
+    pub chunks_total: u8,
+}
+
+/// Resolution and quality preset for the outgoing stream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VideoQuality {
+    /// 160×120 @ JPEG q10 — typically 1–2 radio packets. Lowest latency.
+    Fast,
+    /// 320×240 @ JPEG q20 — typically 3–5 radio packets. Good balance.
+    Balanced,
+    /// 640×480 @ JPEG q30 — 10–25 packets. Use only on clean links.
+    Rich,
+}
+
+impl VideoQuality {
+    fn dims(self) -> (u32, u32) {
+        match self {
+            Self::Fast => (160, 120),
+            Self::Balanced => (320, 240),
+            Self::Rich => (640, 480),
+        }
+    }
+    fn jpeg_quality(self) -> u8 {
+        match self {
+            Self::Fast => 10,
+            Self::Balanced => 20,
+            Self::Rich => 30,
+        }
+    }
+}
+
+// ── VideoChannel ──────────────────────────────────────────────────────────────
+
+/// Unreliable video lane over a `Transport`. Create once; clone the `Arc`.
+///
+/// TX: call `send_frame` with raw JPEG bytes — it fragments and broadcasts.
+/// RX: call `subscribe` to get a channel of reassembled `VideoFrame`s.
+pub struct VideoChannel {
+    transport: Arc<dyn Transport>,
+    frame_id: AtomicU32,
+    subscribers: Mutex<Vec<mpsc::Sender<VideoFrame>>>,
+}
+
+impl VideoChannel {
+    pub fn new(transport: Arc<dyn Transport>) -> Arc<Self> {
+        let ch = Arc::new(Self {
+            transport: transport.clone(),
+            frame_id: AtomicU32::new(rand::random()),
+            subscribers: Mutex::new(Vec::new()),
+        });
+
+        let ch2 = ch.clone();
+        let mut rx = transport.subscribe(Kind::Video);
+        tokio::spawn(async move {
+            // Per-source state: current frame_id + chunk accumulator
+            let mut buffers: HashMap<NodeId, (u32, u8, HashMap<u8, Vec<u8>>)> = HashMap::new();
+
+            while let Some((meta, payload)) = rx.recv().await {
+                if payload.len() < HDR {
+                    continue;
+                }
+                let frame_id =
+                    u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
+                let chunk_idx = payload[4];
+                let total = payload[5];
+                if total == 0 {
+                    continue;
+                }
+                let data = payload[HDR..].to_vec();
+                let source = meta.sender_id;
+
+                let entry = buffers.entry(source).or_insert((frame_id, total, HashMap::new()));
+
+                if frame_id > entry.0 {
+                    // New frame — drop old incomplete buffer
+                    *entry = (frame_id, total, HashMap::new());
+                } else if frame_id < entry.0 {
+                    // Stale chunk
+                    continue;
+                }
+
+                entry.2.insert(chunk_idx, data);
+
+                let received = entry.2.len() as u8;
+                let frame_total = entry.1;
+
+                if received >= frame_total {
+                    let mut assembled = Vec::with_capacity(frame_total as usize * CHUNK_DATA);
+                    for i in 0..frame_total {
+                        if let Some(chunk) = entry.2.get(&i) {
+                            assembled.extend_from_slice(chunk);
+                        }
+                    }
+                    let frame = VideoFrame {
+                        frame_id,
+                        source,
+                        jpeg_bytes: assembled,
+                        chunks_received: received,
+                        chunks_total: frame_total,
+                    };
+                    ch2.emit(frame);
+                    buffers.remove(&source);
+                }
+            }
+        });
+
+        ch
+    }
+
+    /// Fragment `jpeg_bytes` into chunks and broadcast each over the radio.
+    /// Fire-and-forget — no ACK, no retry.
+    pub fn send_frame(&self, jpeg_bytes: &[u8]) -> litm_common::Result<()> {
+        let frame_id = self.frame_id.fetch_add(1, Ordering::Relaxed);
+        let raw_chunks: Vec<&[u8]> = jpeg_bytes.chunks(CHUNK_DATA).collect();
+        let total = raw_chunks.len().min(255) as u8;
+        if total == 0 {
+            return Ok(());
+        }
+        for (idx, chunk) in raw_chunks.iter().enumerate().take(255) {
+            let mut payload = Vec::with_capacity(HDR + chunk.len());
+            payload.extend_from_slice(&frame_id.to_be_bytes());
+            payload.push(idx as u8);
+            payload.push(total);
+            payload.extend_from_slice(chunk);
+            self.transport.broadcast(Kind::Video, &payload)?;
+        }
+        Ok(())
+    }
+
+    /// Get a receiver for fully reassembled remote frames.
+    pub fn subscribe(&self) -> mpsc::Receiver<VideoFrame> {
+        let (tx, rx) = mpsc::channel(4);
+        self.subscribers.lock().unwrap().push(tx);
+        rx
+    }
+
+    fn emit(&self, frame: VideoFrame) {
+        let mut subs = self.subscribers.lock().unwrap();
+        subs.retain(|tx| tx.try_send(frame.clone()).is_ok());
+    }
+}
+
+// ── VideoStreamer ─────────────────────────────────────────────────────────────
+
+/// Encodes raw RGB frames from the camera and sends them over a `VideoChannel`.
+///
+/// Resize + JPEG encode happen here so the camera capture loop stays simple.
 pub struct VideoStreamer {
-    node: Node,
-    seq: Arc<AtomicU32>,
-    codec: VideoCodec,
+    channel: Arc<VideoChannel>,
+    quality: VideoQuality,
 }
 
 impl VideoStreamer {
-    pub fn new(node: Node, codec: VideoCodec) -> Self {
-        Self { node, seq: Arc::new(AtomicU32::new(rand::random())), codec }
+    pub fn new(channel: Arc<VideoChannel>, quality: VideoQuality) -> Self {
+        Self { channel, quality }
     }
 
-    pub fn send_frame(&self, width: u16, height: u16, data: Vec<u8>) -> Result<ObjectId> {
-        let seq = self.seq.fetch_add(1, Ordering::Relaxed);
-        self.node.send_with_policy(
-            MessagePayload::VideoFrame { seq, width, height, codec: self.codec.clone(), data },
-            policy::video_frame(),
-        )
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct VideoFrameData {
-    pub seq: u32,
-    pub width: u16,
-    pub height: u16,
-    pub codec: VideoCodec,
-    pub data: Vec<u8>,
-    pub source: litm_common::NodeId,
-}
-
-/// Receives and decodes video frames from a `Node`, skipping non-video messages
-/// and stale frames (sequence number wrap-aware).
-pub struct VideoReceiver {
-    inner: MessageReceiver,
-    last_seqs: std::collections::HashMap<litm_common::NodeId, u32>,
-}
-
-impl VideoReceiver {
-    pub fn new(node: &Node) -> Self {
-        Self { inner: node.subscribe(), last_seqs: std::collections::HashMap::new() }
-    }
-
-    pub async fn recv_frame(&mut self) -> Result<VideoFrameData> {
-        loop {
-            let msg = self.inner.recv().await?;
-            if let MessagePayload::VideoFrame { seq, width, height, codec, data } = msg.payload {
-                let last = self.last_seqs.get(&msg.source).copied();
-                if is_newer_seq(last, seq) {
-                    self.last_seqs.insert(msg.source, seq);
-                    return Ok(VideoFrameData { seq, width, height, codec, data, source: msg.source });
-                }
-            }
-            // Non-video or stale frame — keep waiting
-        }
+    /// Encode and transmit one camera frame.
+    ///
+    /// `rgb` must be tightly packed RGB24 (width * height * 3 bytes).
+    pub fn send_frame(&self, rgb: &[u8], width: u32, height: u32) -> litm_common::Result<()> {
+        let jpeg = encode_jpeg(rgb, width, height, self.quality);
+        self.channel.send_frame(&jpeg)
     }
 }
 
-/// Wrap-aware seq comparison. Returns true if `seq` is strictly newer than `last`.
-/// Also returns true if `seq` is vastly different (stream restart).
-/// We only reject frames that are slightly old (diff is between u32::MAX - 10000 and u32::MAX).
-fn is_newer_seq(last: Option<u32>, seq: u32) -> bool {
-    match last {
-        None => true,
-        Some(last) => {
-            let diff = seq.wrapping_sub(last);
-            diff != 0 && !(diff > (u32::MAX - 10_000))
-        }
-    }
-}
+fn encode_jpeg(rgb: &[u8], width: u32, height: u32, quality: VideoQuality) -> Vec<u8> {
+    let (tw, th) = quality.dims();
+    let img = image::RgbImage::from_raw(width, height, rgb.to_vec())
+        .map(image::DynamicImage::ImageRgb8)
+        .unwrap_or_else(|| image::DynamicImage::new_rgb8(width, height));
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    let resized = img.resize(tw, th, FilterType::Nearest);
+    let rgb8 = resized.to_rgb8();
 
-    #[test]
-    fn first_frame_always_accepted() {
-        assert!(is_newer_seq(None, 0));
-        assert!(is_newer_seq(None, 999));
-        assert!(is_newer_seq(None, u32::MAX));
-    }
-
-    #[test]
-    fn sequential_frames_accepted() {
-        assert!(is_newer_seq(Some(5), 6));
-        assert!(is_newer_seq(Some(5), 100));
-        assert!(is_newer_seq(Some(5), 10004)); // 5 + 9999
-    }
-
-    #[test]
-    fn stale_frames_rejected() {
-        assert!(!is_newer_seq(Some(100), 100)); // same seq
-        assert!(!is_newer_seq(Some(100), 99));  // one behind
-        assert!(!is_newer_seq(Some(100), 1));   // far behind
-    }
-
-    #[test]
-    fn out_of_window_accepted_as_restart() {
-        assert!(is_newer_seq(Some(5), 10005)); // diff = 10000, accepted as restart
-        assert!(is_newer_seq(Some(5), 20000));
-    }
-
-    #[test]
-    fn wraparound_accepted() {
-        assert!(is_newer_seq(Some(u32::MAX - 1), u32::MAX));
-        assert!(is_newer_seq(Some(u32::MAX - 1), 0)); // wrapped
-        assert!(is_newer_seq(Some(u32::MAX - 1), 5));
-    }
-
-    #[test]
-    fn wraparound_stale_rejected() {
-        // u32::MAX - 5 is not newer than u32::MAX - 1
-        assert!(!is_newer_seq(Some(u32::MAX - 1), u32::MAX - 5));
-    }
-
-    #[test]
-    fn streamer_seq_increments() {
-        let seq = Arc::new(AtomicU32::new(0));
-        assert_eq!(seq.fetch_add(1, Ordering::Relaxed), 0);
-        assert_eq!(seq.fetch_add(1, Ordering::Relaxed), 1);
-        assert_eq!(seq.load(Ordering::Relaxed), 2);
-    }
+    let mut buf = Vec::new();
+    let enc = JpegEncoder::new_with_quality(&mut buf, quality.jpeg_quality());
+    let _ = enc.write_image(rgb8.as_raw(), rgb8.width(), rgb8.height(), image::ExtendedColorType::Rgb8);
+    buf
 }

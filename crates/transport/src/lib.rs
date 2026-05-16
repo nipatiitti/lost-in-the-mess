@@ -51,6 +51,7 @@ struct TransportStats {
     rx_beacon: AtomicU64,
     rx_fec: AtomicU64,
     rx_control: AtomicU64,
+    rx_video: AtomicU64,
 }
 
 pub struct WifiTransport {
@@ -70,6 +71,7 @@ struct Subscribers {
     beacon: Vec<mpsc::Sender<(PacketMeta, Vec<u8>)>>,
     fec: Vec<mpsc::Sender<(PacketMeta, Vec<u8>)>>,
     control: Vec<mpsc::Sender<(PacketMeta, Vec<u8>)>>,
+    video: Vec<mpsc::Sender<(PacketMeta, Vec<u8>)>>,
 }
 
 impl Subscribers {
@@ -78,6 +80,7 @@ impl Subscribers {
             Kind::Beacon => &mut self.beacon,
             Kind::Fec => &mut self.fec,
             Kind::Control => &mut self.control,
+            Kind::Video => &mut self.video,
         }
     }
 }
@@ -132,10 +135,11 @@ impl WifiTransport {
                     let rx_beacon = stats.rx_beacon.load(Ordering::Relaxed);
                     let rx_fec = stats.rx_fec.load(Ordering::Relaxed);
                     let rx_control = stats.rx_control.load(Ordering::Relaxed);
+                    let rx_video = stats.rx_video.load(Ordering::Relaxed);
                     let level = if radio + sub + decrypt + replay + gaps > 0 { "WARN" } else { "INFO" };
                     if level == "WARN" {
                         warn!(
-                            rx_beacon, rx_fec, rx_control,
+                            rx_beacon, rx_fec, rx_control, rx_video,
                             radio_queue_full = radio,
                             subscriber_full = sub,
                             decrypt_fail = decrypt,
@@ -145,7 +149,7 @@ impl WifiTransport {
                         );
                     } else {
                         info!(
-                            rx_beacon, rx_fec, rx_control,
+                            rx_beacon, rx_fec, rx_control, rx_video,
                             "transport stats (cumulative, no drops)"
                         );
                     }
@@ -223,12 +227,14 @@ impl WifiTransport {
             0 => Kind::Beacon,
             1 => Kind::Fec,
             2 => Kind::Control,
+            3 => Kind::Video,
             _ => return Err(Error::BadFrame("unknown kind")),
         };
         match kind {
             Kind::Beacon => self.stats.rx_beacon.fetch_add(1, Ordering::Relaxed),
             Kind::Fec => self.stats.rx_fec.fetch_add(1, Ordering::Relaxed),
             Kind::Control => self.stats.rx_control.fetch_add(1, Ordering::Relaxed),
+            Kind::Video => self.stats.rx_video.fetch_add(1, Ordering::Relaxed),
         };
         let payload_len = u16::from_be_bytes([pt[1], pt[2]]) as usize;
         if 3 + payload_len > pt.len() {
@@ -290,7 +296,9 @@ impl Transport for WifiTransport {
         header.encode(&mut wire)?;
 
         let pt_len = match kind {
-            Kind::Beacon => 3 + payload.len(),
+            // Beacons and video chunks are sent at natural size — no LPD padding needed.
+            // Video: the stream itself is the observable; padding wastes ~1370 bytes/chunk.
+            Kind::Beacon | Kind::Video => 3 + payload.len(),
             _ => MAX_PLAINTEXT,
         };
         let mut pt = vec![0u8; pt_len];

@@ -1,4 +1,7 @@
-use app_sdk::{VideoCodec, VideoStreamer};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use app_sdk::{VideoChannel, VideoQuality, VideoStreamer};
 use nokhwa::{
     Camera,
     pixel_format::RgbFormat,
@@ -6,13 +9,21 @@ use nokhwa::{
 };
 use tokio::sync::mpsc;
 
+/// Target capture resolution — we ask nokhwa for this; actual camera may differ.
+const CAPTURE_WIDTH: u32 = 640;
+const CAPTURE_HEIGHT: u32 = 480;
+
+/// Max outgoing frame rate. Excess frames are dropped so the radio isn't flooded.
+const MAX_FPS: u64 = 15;
+const FRAME_BUDGET: Duration = Duration::from_millis(1000 / MAX_FPS);
+
 pub fn run_capture(
-    node: app_sdk::Node,
+    video_ch: Arc<VideoChannel>,
+    quality: VideoQuality,
     mut cmd_rx: mpsc::Receiver<bool>,
-    preview_tx: mpsc::Sender<image::DynamicImage>,
+    preview_tx: mpsc::Sender<Vec<u8>>,
 ) {
     loop {
-        // Wait for a start command
         match cmd_rx.blocking_recv() {
             Some(true) => {}
             Some(false) => continue,
@@ -21,7 +32,9 @@ pub fn run_capture(
 
         let mut camera = match Camera::new(
             CameraIndex::Index(0),
-            RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestFrameRate),
+            RequestedFormat::new::<RgbFormat>(RequestedFormatType::HighestResolution(
+                nokhwa::utils::Resolution::new(CAPTURE_WIDTH, CAPTURE_HEIGHT),
+            )),
         ) {
             Ok(c) => c,
             Err(e) => {
@@ -34,10 +47,11 @@ pub fn run_capture(
             continue;
         }
 
-        let streamer = VideoStreamer::new(node.clone(), VideoCodec::Mjpeg);
+        let streamer = VideoStreamer::new(Arc::clone(&video_ch), quality);
         let res = camera.resolution();
-        let width = res.width() as u16;
-        let height = res.height() as u16;
+        let cap_w = res.width();
+        let cap_h = res.height();
+        let mut last_sent = Instant::now() - FRAME_BUDGET;
 
         loop {
             match cmd_rx.try_recv() {
@@ -50,13 +64,19 @@ pub fn run_capture(
                 Err(_) => continue,
             };
 
-            let raw = frame.buffer().to_vec();
+            let rgb = frame.buffer().to_vec();
 
-            let _ = streamer.send_frame(width, height, raw.clone());
+            // Local preview — always send for UI feedback regardless of rate limit
+            let _ = preview_tx.try_send(rgb.clone());
 
-            if let Ok(img) = image::load_from_memory_with_format(&raw, image::ImageFormat::Jpeg) {
-                let _ = preview_tx.try_send(img);
+            // Rate-limit the radio stream
+            let now = Instant::now();
+            if now.duration_since(last_sent) < FRAME_BUDGET {
+                continue;
             }
+            last_sent = now;
+
+            let _ = streamer.send_frame(&rgb, cap_w, cap_h);
         }
 
         let _ = camera.stop_stream();

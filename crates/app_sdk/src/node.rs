@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use litm_common::{Delivery, Mesh, NeighborInfo, NodeId, ObjectId, SendPolicy};
+use litm_common::{Delivery, Mesh, NeighborInfo, NodeId, ObjectId, SendPolicy, Transport};
 use tokio::sync::broadcast;
 
 use crate::error::{Result, SdkError};
@@ -12,6 +12,7 @@ use crate::policy;
 #[derive(Clone)]
 pub struct Node {
     local_id: NodeId,
+    transport: Arc<dyn Transport>,
     delivery: Arc<dyn Delivery>,
     mesh: Arc<dyn Mesh>,
     tx: broadcast::Sender<litm_common::DeliveredObject>,
@@ -20,17 +21,23 @@ pub struct Node {
 impl Node {
     pub(crate) fn new(
         local_id: NodeId,
+        transport: Arc<dyn Transport>,
         delivery: Arc<dyn Delivery>,
         mesh: Arc<dyn Mesh>,
         tx: broadcast::Sender<litm_common::DeliveredObject>,
     ) -> Self {
-        Self { local_id, delivery, mesh, tx }
+        Self { local_id, transport, delivery, mesh, tx }
     }
 
     // --- identity ---
 
     pub fn local_id(&self) -> NodeId {
         self.local_id
+    }
+
+    /// Raw transport — use to create a `VideoChannel` for the unreliable video lane.
+    pub fn transport(&self) -> Arc<dyn Transport> {
+        Arc::clone(&self.transport)
     }
 
     // --- sending ---
@@ -122,11 +129,24 @@ mod tests {
     use crate::broadcast::spawn_delivery_bridge;
     use crate::message::encode_message;
     use litm_common::{
-        DeliveredObject, NodeId, ObjectBitmap, ObjectId, Result as CommonResult, SendPolicy,
+        DeliveredObject, Kind, NodeId, ObjectBitmap, ObjectId, PacketMeta, Result as CommonResult,
+        SendPolicy,
     };
     use std::collections::HashMap;
     use std::sync::Mutex;
     use tokio::sync::mpsc;
+
+    // --- MockTransport ---
+
+    struct MockTransport;
+    impl Transport for MockTransport {
+        fn local_id(&self) -> NodeId { 1 }
+        fn broadcast(&self, _kind: Kind, _payload: &[u8]) -> CommonResult<()> { Ok(()) }
+        fn subscribe(&self, _kind: Kind) -> mpsc::Receiver<(PacketMeta, Vec<u8>)> {
+            mpsc::channel(1).1
+        }
+        fn set_channel(&self, _ch: u8) -> CommonResult<()> { Ok(()) }
+    }
 
     // --- MockDelivery ---
 
@@ -186,11 +206,13 @@ mod tests {
     }
 
     fn make_node() -> (Arc<MockDelivery>, Node) {
+        let transport = Arc::new(MockTransport) as Arc<dyn Transport>;
         let delivery = Arc::new(MockDelivery::new());
         let mesh = Arc::new(MockMesh);
         let tx = spawn_delivery_bridge(Arc::clone(&delivery) as Arc<dyn Delivery>);
         let node = Node::new(
             1,
+            transport,
             Arc::clone(&delivery) as Arc<dyn Delivery>,
             mesh as Arc<dyn Mesh>,
             tx,

@@ -5,11 +5,16 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Table},
 };
-use ratatui_image::{StatefulImage, picker::Picker};
+use ratatui_image::{StatefulImage, protocol::StatefulProtocol};
 
 use super::app::{ActivePanel, App};
 
-pub fn render(f: &mut Frame, app: &App, picker: &mut Picker) {
+pub fn render(
+    f: &mut Frame,
+    app: &App,
+    local_preview_proto: &mut Option<StatefulProtocol>,
+    remote_video_proto: &mut Option<StatefulProtocol>,
+) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(0)])
@@ -27,7 +32,7 @@ pub fn render(f: &mut Frame, app: &App, picker: &mut Picker) {
     match app.active_panel {
         ActivePanel::Topology => render_topology(f, cols[1], app),
         ActivePanel::Messages => render_messages_compose(f, cols[1], app),
-        ActivePanel::Video => render_video(f, cols[1], app, picker),
+        ActivePanel::Video => render_video(f, cols[1], app, local_preview_proto, remote_video_proto),
     }
 }
 
@@ -163,28 +168,45 @@ fn render_compose(f: &mut Frame, area: Rect, app: &App) {
     f.set_cursor_position((cursor_x, inner.y));
 }
 
-fn render_video(f: &mut Frame, area: Rect, app: &App, picker: &mut Picker) {
+fn render_video(
+    f: &mut Frame,
+    area: Rect,
+    app: &App,
+    local_preview_proto: &mut Option<StatefulProtocol>,
+    remote_video_proto: &mut Option<StatefulProtocol>,
+) {
     let halves = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
         .split(area);
 
-    render_received_video(f, halves[0], app, picker);
-    render_local_camera(f, halves[1], app, picker);
+    render_received_video(f, halves[0], app, remote_video_proto);
+    render_local_camera(f, halves[1], app, local_preview_proto);
 }
 
-fn render_received_video(f: &mut Frame, area: Rect, app: &App, picker: &mut Picker) {
+fn render_received_video(f: &mut Frame, area: Rect, app: &App, remote_video_proto: &mut Option<StatefulProtocol>) {
     let title = match &app.latest_video {
-        Some(v) => format!(" Received  from:{}  seq:{} ", v.source, v.seq),
-        None    => " Received  (waiting...) ".to_string(),
+        Some(v) => {
+            let loss_pct = if v.chunks_total > 0 {
+                100u32.saturating_sub(
+                    v.chunks_received as u32 * 100 / v.chunks_total as u32,
+                )
+            } else {
+                0
+            };
+            format!(
+                " Received  from:{}  frame:{}  loss:{}% ",
+                v.source, v.frame_id, loss_pct
+            )
+        }
+        None => " Received  (waiting...) ".to_string(),
     };
     let block = Block::default().borders(Borders::ALL).title(title);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    if let Some(ref frame) = app.latest_video {
-        let mut proto = picker.new_resize_protocol(frame.image.clone());
-        f.render_stateful_widget(StatefulImage::default(), inner, &mut proto);
+    if let Some(proto) = remote_video_proto {
+        f.render_stateful_widget(StatefulImage::default(), inner, proto);
     } else {
         f.render_widget(
             Paragraph::new("No stream received")
@@ -194,7 +216,7 @@ fn render_received_video(f: &mut Frame, area: Rect, app: &App, picker: &mut Pick
     }
 }
 
-fn render_local_camera(f: &mut Frame, area: Rect, app: &App, picker: &mut Picker) {
+fn render_local_camera(f: &mut Frame, area: Rect, app: &App, local_preview_proto: &mut Option<StatefulProtocol>) {
     let (status, status_style) = if app.streaming {
         (
             format!(" Camera  \u{25cf} LIVE  {} frames  [s] stop ", app.stream_frames_sent),
@@ -212,9 +234,8 @@ fn render_local_camera(f: &mut Frame, area: Rect, app: &App, picker: &mut Picker
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    if let Some(ref img) = app.local_preview {
-        let mut proto = picker.new_resize_protocol(img.clone());
-        f.render_stateful_widget(StatefulImage::default(), inner, &mut proto);
+    if let Some(proto) = local_preview_proto {
+        f.render_stateful_widget(StatefulImage::default(), inner, proto);
     } else if app.streaming {
         f.render_widget(
             Paragraph::new("Opening camera...")

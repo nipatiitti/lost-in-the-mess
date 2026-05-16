@@ -1,8 +1,8 @@
 pub mod frame;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 use raptorq::{Decoder, Encoder, EncodingPacket, ObjectTransmissionInformation, PayloadId};
@@ -12,14 +12,48 @@ use litm_common::{
     DeliveredObject, Delivery, Kind, NodeId, ObjectBitmap, ObjectId, Result, SendPolicy, Transport,
 };
 
+/// Bounded set of recently-completed object IDs. O(1) lookup, O(1) eviction.
+struct CompletedSet {
+    ids: HashSet<ObjectId>,
+    order: VecDeque<ObjectId>,
+    cap: usize,
+}
+
+impl CompletedSet {
+    fn new(cap: usize) -> Self {
+        Self { ids: HashSet::with_capacity(cap + 1), order: VecDeque::with_capacity(cap + 1), cap }
+    }
+
+    fn contains(&self, id: ObjectId) -> bool {
+        self.ids.contains(&id)
+    }
+
+    fn insert(&mut self, id: ObjectId) {
+        if self.ids.insert(id) {
+            self.order.push_back(id);
+            if self.order.len() > self.cap {
+                if let Some(evicted) = self.order.pop_front() {
+                    self.ids.remove(&evicted);
+                }
+            }
+        }
+    }
+}
+
 pub struct RaptorQDelivery<T: Transport + ?Sized> {
     transport: Arc<T>,
     subscribers: Arc<Mutex<Vec<mpsc::Sender<DeliveredObject>>>>,
-    decoders: Arc<Mutex<HashMap<ObjectId, Decoder>>>,
-    completed_objects: Arc<Mutex<Vec<ObjectId>>>,
+    /// Value is (decoder, time of last packet received for this object).
+    decoders: Arc<Mutex<HashMap<ObjectId, (Decoder, Instant)>>>,
+    completed_objects: Arc<Mutex<CompletedSet>>,
     peer_coverage: Arc<Mutex<HashMap<NodeId, ObjectBitmap>>>,
     local_bitmap: Arc<Mutex<ObjectBitmap>>,
 }
+
+/// Incomplete decoders older than this are dropped (no more packets expected after TTL expires).
+const DECODER_STALE_SECS: u64 = 10;
+/// How many recently-completed object IDs to remember to suppress re-delivery.
+const COMPLETED_CAP: usize = 4096;
 
 impl<T: Transport + 'static + ?Sized> RaptorQDelivery<T> {
     pub fn new(transport: Arc<T>) -> Arc<Self> {
@@ -27,17 +61,27 @@ impl<T: Transport + 'static + ?Sized> RaptorQDelivery<T> {
             transport: transport.clone(),
             subscribers: Arc::new(Mutex::new(Vec::new())),
             decoders: Arc::new(Mutex::new(HashMap::new())),
-            completed_objects: Arc::new(Mutex::new(Vec::new())),
+            completed_objects: Arc::new(Mutex::new(CompletedSet::new(COMPLETED_CAP))),
             peer_coverage: Arc::new(Mutex::new(HashMap::new())),
             local_bitmap: Arc::new(Mutex::new(ObjectBitmap::default())),
         });
 
         let mut rx = transport.subscribe(Kind::Fec);
         let delivery_clone = delivery.clone();
-
         tokio::spawn(async move {
             while let Some((meta, payload)) = rx.recv().await {
                 delivery_clone.handle_packet(meta.sender_id, &payload).await;
+            }
+        });
+
+        // Periodically evict incomplete decoders for objects we stopped receiving packets for.
+        let decoders_ref = delivery.decoders.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(DECODER_STALE_SECS));
+            loop {
+                interval.tick().await;
+                let cutoff = Instant::now() - Duration::from_secs(DECODER_STALE_SECS);
+                decoders_ref.lock().unwrap().retain(|_, (_, last_seen)| *last_seen > cutoff);
             }
         });
 
@@ -46,31 +90,37 @@ impl<T: Transport + 'static + ?Sized> RaptorQDelivery<T> {
 
     async fn handle_packet(&self, source: NodeId, payload: &[u8]) {
         if let Some(frame) = FecFrame::decode(payload) {
-            let mut completed = self.completed_objects.lock().unwrap();
-            if completed.contains(&frame.object_id) {
-                return;
+            {
+                let completed = self.completed_objects.lock().unwrap();
+                if completed.contains(frame.object_id) {
+                    return;
+                }
             }
 
             let mut decoders = self.decoders.lock().unwrap();
-            let decoder = decoders.entry(frame.object_id).or_insert_with(|| {
+            let (decoder, last_seen) = decoders.entry(frame.object_id).or_insert_with(|| {
                 let mut tl_bytes = [0u8; 8];
                 tl_bytes.copy_from_slice(&frame.oti[0..8]);
                 let transfer_length = u64::from_be_bytes(tl_bytes);
-                Decoder::new(ObjectTransmissionInformation::with_defaults(
-                    transfer_length,
-                    frame.sym_sz,
-                ))
+                (
+                    Decoder::new(ObjectTransmissionInformation::with_defaults(
+                        transfer_length,
+                        frame.sym_sz,
+                    )),
+                    Instant::now(),
+                )
             });
+            *last_seen = Instant::now();
 
             let payload_id = PayloadId::new(frame.block, frame.esi);
             let packet = EncodingPacket::new(payload_id, frame.payload);
 
             if let Some(decoded_payload) = decoder.decode(packet) {
-                completed.push(frame.object_id);
-                self.local_bitmap.lock().unwrap().set(frame.object_id);
-
-                // Free memory! The decoder holds the full payload buffer.
                 decoders.remove(&frame.object_id);
+                drop(decoders);
+
+                self.completed_objects.lock().unwrap().insert(frame.object_id);
+                self.local_bitmap.lock().unwrap().set(frame.object_id);
 
                 let mut subscribers = self.subscribers.lock().unwrap();
                 subscribers.retain(|tx| {
@@ -127,8 +177,6 @@ impl<T: Transport + 'static + ?Sized> Delivery for RaptorQDelivery<T> {
 
                 let encoded_frame = frame.encode();
                 let _ = transport.broadcast(Kind::Fec, &encoded_frame);
-
-                tokio::time::sleep(Duration::from_millis(5)).await;
             }
         });
 
@@ -136,7 +184,7 @@ impl<T: Transport + 'static + ?Sized> Delivery for RaptorQDelivery<T> {
     }
 
     fn subscribe(&self) -> mpsc::Receiver<DeliveredObject> {
-        let (tx, rx) = mpsc::channel(100);
+        let (tx, rx) = mpsc::channel(512);
         self.subscribers.lock().unwrap().push(tx);
         rx
     }

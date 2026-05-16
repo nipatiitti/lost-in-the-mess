@@ -8,6 +8,6 @@ mod broadcast;
 
 pub use builder::NodeBuilder;
 pub use error::{Result, SdkError};
-pub use message::{MessagePayload, ReceivedMessage, VideoCodec, SDK_ENVELOPE_VERSION};
+pub use message::{MessagePayload, ReceivedMessage, SDK_ENVELOPE_VERSION};
 pub use node::{MessageReceiver, Node};
-pub use video::{VideoFrameData, VideoReceiver, VideoStreamer};
+pub use video::{VideoChannel, VideoFrame, VideoQuality, VideoStreamer};

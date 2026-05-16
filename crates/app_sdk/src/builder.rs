@@ -53,6 +53,6 @@ impl NodeBuilder {
         }
 
         let tx = spawn_delivery_bridge(Arc::clone(&delivery));
-        Ok(Node::new(self.node_id, delivery, mesh, tx))
+        Ok(Node::new(self.node_id, transport, delivery, mesh, tx))
     }
 }

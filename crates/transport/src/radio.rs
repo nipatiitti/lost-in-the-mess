@@ -102,7 +102,7 @@ impl Radio {
                 let mut rx = rx;
                 let mut buf = vec![0u8; 4096];
                 while !shutdown_rx.load(Ordering::Relaxed) {
-                    match rx.recv(&mut buf, Duration::from_millis(200)) {
+                    match rx.recv(&mut buf, Duration::from_millis(50)) {
                         Ok(Some((n, meta))) => {
                             let frame = RxFrame {
                                 bytes: buf[..n].to_vec(),
