@@ -181,6 +181,8 @@ enum Commands {
         nodes: usize,
         #[arg(short, long)]
         simulation: bool,
+        #[arg(short, long, default_value = "wlan0")]
+        iface: String,
     },
     Node {
         #[arg(short, long)]
@@ -189,6 +191,8 @@ enum Commands {
         ignore: String,
         #[arg(short, long)]
         simulation: bool,
+        #[arg(short, long, default_value = "wlan0")]
+        iface: String,
     },
     SendImage {
         #[arg(short, long)]
@@ -210,8 +214,8 @@ async fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Launcher { nodes, simulation } => {
-            info!("Launching {} nodes", nodes);
+        Commands::Launcher { nodes, simulation, iface } => {
+            info!("Launching {} nodes on interface {}", nodes, iface);
             let mut children = Vec::new();
             for i in 1..=nodes {
                 let id = i as NodeId;
@@ -233,6 +237,7 @@ async fn main() {
                 if simulation {
                     cmd.arg("--simulation");
                 }
+                cmd.arg("--iface").arg(&iface);
                 let child = cmd.spawn().expect("failed to spawn node");
                 children.push(child);
             }
@@ -251,8 +256,8 @@ async fn main() {
                 let _ = child.kill();
             }
         }
-        Commands::Node { id, ignore, simulation } => {
-            info!("Starting Node {}", id);
+        Commands::Node { id, ignore, simulation, iface } => {
+            info!("Starting Node {} on interface {}", id, iface);
             let ignored_nodes = ignore
                 .split(',')
                 .filter_map(|s| s.parse::<NodeId>().ok())
@@ -264,7 +269,10 @@ async fn main() {
                 let mut root_key = [0u8; 32];
                 let cfg = litm_transport::WifiTransportConfig {
                     local_id: id,
-                    radio: litm_transport::RadioConfig::default(),
+                    radio: litm_transport::RadioConfig {
+                        iface,
+                        ..litm_transport::RadioConfig::default()
+                    },
                     root_key,
                 };
                 litm_transport::WifiTransport::start(cfg).expect("Failed to start WifiTransport")
