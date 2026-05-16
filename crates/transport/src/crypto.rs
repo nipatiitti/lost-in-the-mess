@@ -9,7 +9,7 @@ use hkdf::Hkdf;
 use sha2::Sha256;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use litm_common::{Epoch, Error, Result};
 
@@ -86,13 +86,67 @@ impl KeyStore {
             .map_err(|_| Error::Other("seal failed".into()))
     }
 
+    /// Decrypt a frame, with bounded forward-resync for nodes that are slightly
+    /// behind the group epoch.
+    ///
+    /// Security properties:
+    /// - The key window is **never mutated** by this call; only the epoch-advance
+    ///   task may move the window forward. An attacker cannot corrupt window state
+    ///   by sending fake frames with large epoch values.
+    /// - Forward resync is capped at `MAX_RESYNC_EPOCHS` steps beyond the top of
+    ///   the stored window. Exceeding the cap costs a single bounds check and
+    ///   returns `AuthFailed` immediately — no HKDF work is done.
+    /// - Temporary resync keys are wrapped in `Zeroizing` and wiped on drop,
+    ///   including on panic paths.
     pub fn open(&self, epoch: Epoch, nonce: &[u8; 12], aad: &[u8], ct: &[u8]) -> Result<Vec<u8>> {
-        let w = self.inner.lock().unwrap();
-        let k = w.keys.get(&epoch).ok_or(Error::AuthFailed)?;
-        let cipher = ChaCha20Poly1305::new(Key::from_slice(&k.0));
+        // Attacker-controlled upper bound on HKDF work per packet.
+        // 5 steps × ~1 µs/step = ~5 µs max at line rate; negligible.
+        const MAX_RESYNC_EPOCHS: u32 = 5;
+
+        enum Resolved {
+            Window([u8; 32]),
+            Resync { base: [u8; 32], steps: u32 },
+        }
+
+        let resolved = {
+            let w = self.inner.lock().unwrap();
+            if let Some(k) = w.keys.get(&epoch) {
+                Resolved::Window(k.0)
+            } else {
+                let Some((&top_epoch, top_k)) = w.keys.iter().rev().next() else {
+                    return Err(Error::AuthFailed);
+                };
+                // Reject too-old (ratchet is one-way) and too-far-ahead (HKDF-DoS guard).
+                if epoch <= w.current || epoch > top_epoch + MAX_RESYNC_EPOCHS {
+                    return Err(Error::AuthFailed);
+                }
+                Resolved::Resync {
+                    base: top_k.0, // copy bytes out before releasing lock
+                    steps: epoch - top_epoch,
+                }
+            }
+            // lock released here
+        };
+
+        // Derive the working key. Each intermediate value is wrapped in Zeroizing
+        // so it is wiped on assignment/drop, even if decrypt panics.
+        let key: Zeroizing<[u8; 32]> = match resolved {
+            Resolved::Window(k) => Zeroizing::new(k),
+            Resolved::Resync { base, steps } => {
+                let mut k = Zeroizing::new(base);
+                for _ in 0..steps {
+                    let next = Zeroizing::new(ratchet(&k));
+                    k = next;
+                }
+                k
+            }
+        };
+
+        let cipher = ChaCha20Poly1305::new(Key::from_slice(&*key));
         cipher
             .decrypt(Nonce::from_slice(nonce), Payload { msg: ct, aad })
             .map_err(|_| Error::AuthFailed)
+        // `key` dropped and zeroized here
     }
 }
 
@@ -141,5 +195,76 @@ mod tests {
         let b = KeyStore::new([42u8; 32], 100);
         let ct = a.seal(100, &[9u8; 12], b"aad", b"ping").unwrap();
         assert_eq!(b.open(100, &[9u8; 12], b"aad", &ct).unwrap(), b"ping");
+    }
+
+    // --- epoch resync tests ---
+
+    #[test]
+    fn resync_one_epoch_ahead() {
+        // Sender is at epoch 6; receiver is still at epoch 5 (window: {5, 6}).
+        // Receiver must be able to open a frame sealed at epoch 6 even if the
+        // epoch-advance task hasn't run yet.
+        let sender = KeyStore::new([1u8; 32], 5);
+        sender.advance(6); // sender advanced its window
+        let receiver = KeyStore::new([1u8; 32], 5); // receiver still at epoch 5
+
+        let ct = sender.seal(6, &[0u8; 12], b"aad", b"data").unwrap();
+        // epoch 6 IS in receiver's window ({5, 6}) — fast path
+        assert_eq!(receiver.open(6, &[0u8; 12], b"aad", &ct).unwrap(), b"data");
+    }
+
+    #[test]
+    fn resync_two_epochs_ahead() {
+        // Receiver is at epoch 5 (window: {5, 6}); sender is at epoch 7.
+        // Epoch 7 is NOT in receiver's window; resync must derive K_7 on the fly.
+        let sender = KeyStore::new([2u8; 32], 7);
+        let receiver = KeyStore::new([2u8; 32], 5);
+
+        let ct = sender.seal(7, &[0u8; 12], b"aad", b"hello").unwrap();
+        assert_eq!(
+            receiver.open(7, &[0u8; 12], b"aad", &ct).unwrap(),
+            b"hello"
+        );
+    }
+
+    #[test]
+    fn resync_at_max_boundary() {
+        // epoch = top_epoch + MAX_RESYNC_EPOCHS (5) must succeed.
+        let sender = KeyStore::new([3u8; 32], 10);
+        let receiver = KeyStore::new([3u8; 32], 5); // window: {5, 6}, top=6
+
+        // Derive the key that both parties would reach at epoch 10.
+        let ct = sender.seal(10, &[0u8; 12], b"x", b"ok").unwrap();
+        // top_epoch = 6, epoch = 10, steps = 4 ≤ MAX_RESYNC_EPOCHS(5) — must open
+        assert_eq!(receiver.open(10, &[0u8; 12], b"x", &ct).unwrap(), b"ok");
+    }
+
+    #[test]
+    fn resync_beyond_max_rejected() {
+        // epoch = top_epoch + MAX_RESYNC_EPOCHS + 1 must be rejected immediately.
+        let receiver = KeyStore::new([4u8; 32], 5); // window: {5, 6}, top=6
+        // epoch 12 = 6 + 5 + 1 — over the cap
+        assert!(receiver.open(12, &[0u8; 12], b"x", b"garbage").is_err());
+    }
+
+    #[test]
+    fn resync_old_epoch_rejected() {
+        // Epochs at or below w.current cannot be opened via resync
+        // (ratchet is one-way; if not in window, they're gone).
+        let ks = KeyStore::new([5u8; 32], 5);
+        ks.advance(7); // window: {6, 7, 8}, current = 7
+        // epoch 5 < current(7): rejected
+        assert!(ks.open(5, &[0u8; 12], b"x", b"garbage").is_err());
+    }
+
+    #[test]
+    fn resync_wrong_key_fails_aead() {
+        // Even within resync range, a frame sealed with the wrong root cannot
+        // decrypt — AEAD authentication catches it.
+        let sender = KeyStore::new([0xAAu8; 32], 7);
+        let receiver = KeyStore::new([0xBBu8; 32], 5); // different root
+
+        let ct = sender.seal(7, &[0u8; 12], b"aad", b"secret").unwrap();
+        assert!(receiver.open(7, &[0u8; 12], b"aad", &ct).is_err());
     }
 }

@@ -125,8 +125,9 @@ impl WifiTransport {
             return Err(Error::Replay);
         }
 
-        if pt.is_empty() {
-            return Err(Error::BadFrame("empty plaintext"));
+        // Plaintext layout: Kind(1) | payload_len(2 BE) | payload | padding.
+        if pt.len() < 3 {
+            return Err(Error::BadFrame("plaintext too short"));
         }
         let kind = match pt[0] {
             0 => Kind::Beacon,
@@ -134,7 +135,11 @@ impl WifiTransport {
             2 => Kind::Control,
             _ => return Err(Error::BadFrame("unknown kind")),
         };
-        let inner = pt[1..].to_vec();
+        let payload_len = u16::from_be_bytes([pt[1], pt[2]]) as usize;
+        if 3 + payload_len > pt.len() {
+            return Err(Error::BadFrame("payload length overflow"));
+        }
+        let inner = pt[3..3 + payload_len].to_vec();
         let meta = PacketMeta {
             sender_id: header.sender,
             counter: header.counter,
@@ -162,7 +167,10 @@ impl Transport for WifiTransport {
     }
 
     fn broadcast(&self, kind: Kind, payload: &[u8]) -> Result<()> {
-        if 1 + payload.len() > MAX_PLAINTEXT {
+        // Plaintext layout: Kind(1) | payload_len(2 BE) | payload | zero-pad → MAX_PLAINTEXT.
+        // All frames are padded to the same size so a passive observer cannot distinguish
+        // a small beacon from a large FEC symbol by frame length (LPI/LPD, design decision 7).
+        if 3 + payload.len() > MAX_PLAINTEXT {
             return Err(Error::BadFrame("payload too large"));
         }
         let counter = self.send_counter.fetch_add(1, Ordering::Relaxed);
@@ -178,9 +186,11 @@ impl Transport for WifiTransport {
         let mut wire = vec![0u8; HEADER_LEN];
         header.encode(&mut wire)?;
 
-        let mut pt = Vec::with_capacity(1 + payload.len());
-        pt.push(kind as u8);
-        pt.extend_from_slice(payload);
+        let mut pt = vec![0u8; MAX_PLAINTEXT]; // pre-zeroed; trailing zeros are the pad
+        pt[0] = kind as u8;
+        let len = payload.len() as u16;
+        pt[1..3].copy_from_slice(&len.to_be_bytes());
+        pt[3..3 + payload.len()].copy_from_slice(payload);
 
         let ct = self.keys.seal(epoch, &header.nonce(), &wire, &pt)?;
         wire.extend_from_slice(&ct);
