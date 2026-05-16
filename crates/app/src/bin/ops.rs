@@ -7,10 +7,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{info, warn};
 
-fn derive_root_key(password: &str) -> [u8; 32] {
-    use sha2::{Digest, Sha256};
-    Sha256::digest(password.as_bytes()).into()
-}
+use litm_transport::derive_root_key;
 
 #[derive(Parser)]
 struct Cli {

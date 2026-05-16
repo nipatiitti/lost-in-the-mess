@@ -3,13 +3,25 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use clap::Parser;
 use litm_common::{Delivery, Mesh, NodeId, NeighborInfo, SendPolicy};
 use litm_delivery::RaptorQDelivery;
 use litm_mesh::MeshService;
+use litm_transport::{derive_root_key, WifiTransport, WifiTransportConfig, RadioConfig};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
 use tracing::info;
+
+#[derive(Parser)]
+struct Cli {
+    #[arg(short = 'n', long)]
+    id: NodeId,
+    #[arg(short, long, default_value = "litm")]
+    password: String,
+    #[arg(short, long, default_value = "wlan0")]
+    iface: String,
+}
 
 #[derive(Clone)]
 struct AppState {
@@ -66,37 +78,21 @@ async fn send_message(
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    // For hackathon simplicity, we hardcode some defaults or use env/args.
-    let id: NodeId = std::env::var("NODE_ID")
-        .unwrap_or_else(|_| "1".to_string())
-        .parse()
-        .unwrap();
+    let cli = Cli::parse();
+    info!("Starting LITM API for Node {} on interface {}", cli.id, cli.iface);
 
-    info!("Starting LITM API for Node {}", id);
-
-    // Initialize transport (using MockTransport for simulation if needed, 
-    // but here we'll assume we can use the real one or a mock).
-    // For the demo, we'll use a simple loopback or real radio if available.
-    
-    // TODO: Connect to real transport or mock. 
-    // For now, let's assume we are running in simulation mode or have a radio.
-    // In a real hackathon, you'd pass the interface name.
-    
-    let transport: Arc<dyn litm_common::Transport> = if std::env::var("SIMULATION").is_ok() {
-        litm_transport::MockTransport::new(id).await
-    } else {
-        let root_key = [0u8; 32];
-        let cfg = litm_transport::WifiTransportConfig {
-            local_id: id,
-            radio: litm_transport::RadioConfig {
-                iface: std::env::var("IFACE").unwrap_or_else(|_| "wlan0".to_string()),
-                ..litm_transport::RadioConfig::default()
-            },
-            root_key,
-        };
-        litm_transport::WifiTransport::start(cfg)
-            .expect("Failed to start transport. Is wlan0 in monitor mode? (Try SIMULATION=1)")
+    let root_key = derive_root_key(&cli.password);
+    let cfg = WifiTransportConfig {
+        local_id: cli.id,
+        radio: RadioConfig {
+            iface: cli.iface,
+            ..RadioConfig::default()
+        },
+        root_key,
     };
+
+    let transport: Arc<dyn litm_common::Transport> = WifiTransport::start(cfg)
+        .expect("Failed to start transport. Is the interface in monitor mode?");
 
     let delivery = RaptorQDelivery::new(Arc::clone(&transport));
     let mesh = MeshService::new(
@@ -128,7 +124,7 @@ async fn main() {
     });
 
     let state = AppState {
-        local_id: id,
+        local_id: cli.id,
         mesh,
         delivery,
         messages,

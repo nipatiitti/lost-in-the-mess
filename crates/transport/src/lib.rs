@@ -2,11 +2,13 @@
 
 mod crypto;
 mod frame;
-pub mod mock;
 mod radio;
 mod replay;
 
-pub use mock::MockTransport;
+pub fn derive_root_key(password: &str) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(password.as_bytes()).into()
+}
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
