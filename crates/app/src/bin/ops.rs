@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use litm_common::{
-    DeliveredObject, Delivery, Kind, NodeId, ObjectBitmap, PacketMeta, Result, SendPolicy,
+    Delivery, Kind, NodeId, PacketMeta, Result, SendPolicy,
     Transport,
 };
 use litm_delivery::RaptorQDelivery;
