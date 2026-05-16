@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["crates/common", "crates/transport", "crates/delivery", "crates/mesh", "crates/app"]
+
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0"
+
+[workspace.dependencies]
+# Internal
+litm-common    = { path = "crates/common" }
+litm-transport = { path = "crates/transport" }
+litm-delivery  = { path = "crates/delivery" }
+litm-mesh      = { path = "crates/mesh" }
+
+#External
+wfb_rs         = { git = "https://github.com/kova-labs/kova-wfb-rs.git" }
