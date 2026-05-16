@@ -1,5 +1,5 @@
 <script>
-  import { Layers, Grid, Send, Activity, Video } from '@lucide/svelte';
+  import { Layers, Grid, Send, Activity, Video, MapPin } from '@lucide/svelte';
   export let screen;
   export let setScreen;
   export let nodes = [];
@@ -23,6 +23,7 @@
     { id: "topology", label: "Topology", icon: Layers, count: nodes.length },
     { id: "nodes",    label: "Nodes",    icon: Grid, count: nodes.length },
     { id: "streams",  label: "Streams",  icon: Video, count: activeStreamsCount },
+    { id: "map",      label: "Map",      icon: MapPin, count: null },
     { id: "uplink",   label: "Uplink",   icon: Send, count: null },
     { id: "log",      label: "Log",      icon: Activity, count: "LIVE" },
   ];

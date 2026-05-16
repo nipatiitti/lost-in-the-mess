@@ -7,6 +7,7 @@
   import PacketLog from './lib/PacketLog.svelte';
   import Composer from './lib/Composer.svelte';
   import Streams from './lib/Streams.svelte';
+  import MapView from './lib/MapView.svelte';
 
 
   let data = {
@@ -263,6 +264,8 @@
           <Composer {nodes} onSend={handleSend} {lastResult} entries={formattedMessages} />
         {:else if screen === "streams"}
           <Streams activeStreams={data.active_streams || []} {nodes} />
+        {:else if screen === "map"}
+          <MapView messages={formattedMessages} localId={data.local_id} onSend={handleSend} {connected} />
         {:else if screen === "log"}
           <PacketLog entries={formattedMessages} />
         {/if}
