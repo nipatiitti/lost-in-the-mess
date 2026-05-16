@@ -45,7 +45,7 @@ pub mod platform {
             let mut stream = Stream::with_buffers(&mut dev, Type::VideoCapture, 4)
                 .expect("Failed to create capture stream");
                 
-            let mut object_id: ObjectId = 0;
+            let mut object_id: ObjectId = rand::random();
             
             loop {
                 // Read frame
