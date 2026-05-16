@@ -32,7 +32,12 @@
         {#if !dense}<div style="color:var(--bone-500)">{e.time}</div>{/if}
         <div style="color:{colorForState(e.nodeState || 'ok')}">{e.node}</div>
         {#if !dense}<div style="color:var(--bone-100)">{e.kind}</div>{/if}
-        <div style="color:var(--bone-300);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title={e.payload}>{e.payload}</div>
+        <div style="color:var(--bone-300);overflow:hidden;display:flex;align-items:center;gap:8px" title={e.payload}>
+          {#if e.image}
+            <img src={e.image} alt="attachment" style="height:18px;width:auto;border:1px solid var(--border);border-radius:1px;flex-shrink:0" />
+          {/if}
+          <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{e.payload}</span>
+        </div>
         <div style="text-align:right;color:{colorForState(e.result === 'OK' ? 'ok' : e.result === 'RELAY' ? 'relay' : 'lost')}">{e.result}</div>
       </div>
     {/each}

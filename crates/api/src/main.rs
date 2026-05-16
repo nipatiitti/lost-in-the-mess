@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
 use tracing::info;
+use base64::{Engine as _, prelude::BASE64_STANDARD};
 
 use app_sdk::{MessagePayload, Node, NodeBuilder};
 
@@ -32,7 +33,8 @@ struct AppState {
 struct ApiMessage {
     id: u32,
     source: NodeId,
-    text: String,
+    text: Option<String>,
+    image: Option<String>, // Data URI
     timestamp: u64,
 }
 
@@ -46,7 +48,8 @@ struct GodData {
 
 #[derive(Deserialize)]
 struct SendRequest {
-    text: String,
+    text: Option<String>,
+    image: Option<String>, // Data URI
 }
 
 async fn get_data(State(state): State<AppState>) -> Json<GodData> {
@@ -62,9 +65,53 @@ async fn send_message(
     State(state): State<AppState>,
     Json(req): Json<SendRequest>,
 ) -> Json<serde_json::Value> {
-    info!("Sending message: {}", req.text);
-    let _ = state.node.send(MessagePayload::Text { content: req.text });
-    Json(serde_json::json!({ "status": "ok" }))
+    let mut sent = false;
+    
+    if let Some(text) = req.text {
+        if !text.trim().is_empty() {
+            info!("Sending text message");
+            if let Err(e) = state.node.send(MessagePayload::Text { content: text }) {
+                tracing::error!("Failed to send text: {}", e);
+                return Json(serde_json::json!({ "status": "error", "message": e.to_string() }));
+            }
+            sent = true;
+        }
+    }
+    
+    if let Some(image_uri) = req.image {
+        info!("Sending image ({} bytes)", image_uri.len());
+        if let Some((mime, data)) = parse_data_uri(&image_uri) {
+            if let Err(e) = state.node.send(MessagePayload::Image { mime, bytes: data }) {
+                tracing::error!("Failed to send image: {}", e);
+                return Json(serde_json::json!({ "status": "error", "message": e.to_string() }));
+            }
+            sent = true;
+        } else {
+            tracing::warn!("Failed to parse image data URI");
+        }
+    }
+    
+    if sent {
+        Json(serde_json::json!({ "status": "ok" }))
+    } else {
+        Json(serde_json::json!({ "status": "error", "message": "Nothing to send" }))
+    }
+}
+
+fn parse_data_uri(uri: &str) -> Option<(String, Vec<u8>)> {
+    if !uri.starts_with("data:") { return None; }
+    let comma_idx = uri.find(',')?;
+    let header = &uri[5..comma_idx];
+    let data_str = &uri[comma_idx+1..];
+    
+    let mime = header.split(';').next()?.to_string();
+    let is_base64 = header.contains(";base64");
+    
+    if is_base64 {
+        BASE64_STANDARD.decode(data_str).ok().map(|d| (mime, d))
+    } else {
+        None
+    }
 }
 
 #[tokio::main]
@@ -86,12 +133,29 @@ async fn main() {
         loop {
             match rx.recv().await {
                 Ok(msg) => {
-                    if let MessagePayload::Text { content } = msg.payload {
+                    let (text, image) = match msg.payload {
+                        MessagePayload::Text { content } => {
+                            info!("Received text message from {}", msg.source);
+                            (Some(content), None)
+                        }
+                        MessagePayload::Image { mime, bytes } => {
+                            info!("Received image message from {} ({} bytes)", msg.source, bytes.len());
+                            let b64 = BASE64_STANDARD.encode(&bytes);
+                            (None, Some(format!("data:{};base64,{}", mime, b64)))
+                        }
+                        _ => {
+                            info!("Received other message payload from {}", msg.source);
+                            (None, None)
+                        }
+                    };
+
+                    if text.is_some() || image.is_some() {
                         let mut msgs = messages_clone.lock().unwrap();
                         msgs.push(ApiMessage {
                             id: msg.id,
                             source: msg.source,
-                            text: content,
+                            text,
+                            image,
                             timestamp: std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .unwrap()
