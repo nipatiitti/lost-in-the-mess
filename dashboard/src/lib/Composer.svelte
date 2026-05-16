@@ -1,6 +1,8 @@
 <script>
   import { MessageSquare, Image as ImageIcon, Video, File, Send } from '@lucide/svelte';
+  import PacketLog from './PacketLog.svelte';
   export let nodes = [];
+  export let entries = [];
   export let lastResult = null;
   export let onSend = () => {};
 
@@ -165,6 +167,13 @@
         <div class="mono" style="font-size:11px;color:{willLikelyLand ? 'var(--signal-300)' : 'var(--uplink-300)'}">
           {willLikelyLand ? "PACKET WILL LIKELY LAND." : "DEGRADED LINK — RETRY EXPECTED."}
         </div>
+      </div>
+    </div>
+
+    <div class="panel bracketed" style="flex:1; display:flex; flex-direction:column; min-height:0; padding: 16px;">
+      <div class="h-eyebrow" style="margin-bottom:12px">LIVE TRAFFIC</div>
+      <div style="flex:1; min-height:0; display:flex; flex-direction:column">
+        <PacketLog {entries} dense={true} />
       </div>
     </div>
   </div>

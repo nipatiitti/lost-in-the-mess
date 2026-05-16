@@ -156,7 +156,7 @@
 
     hopsArr.forEach((nodesAtHop, h) => {
        if (!nodesAtHop) return;
-       const N = nodesAtHop.length;
+       const N = Math.max(nodesAtHop.length, 3);
        const radius = Math.min(20 * h, 45); // cap radius
        nodesAtHop.forEach((n, i) => {
           const angle = (i / N) * 2 * Math.PI + (h * 0.5);
@@ -241,7 +241,7 @@
         {:else if screen === "nodes"}
           <NodeGrid {nodes} selected={selectedNode} setSelected={(n) => selectedNode = n} />
         {:else if screen === "uplink"}
-          <Composer {nodes} onSend={handleSend} {lastResult} />
+          <Composer {nodes} onSend={handleSend} {lastResult} entries={formattedMessages} />
         {:else if screen === "log"}
           <PacketLog entries={formattedMessages} />
         {/if}
