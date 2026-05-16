@@ -125,6 +125,7 @@ impl Radio {
     }
 
     pub fn set_channel(&self, ch: u8) -> Result<()> {
+        tracing::info!(iface = %self.cfg.iface, channel = ch, "switching channel");
         let out = Command::new("iw")
             .arg("dev")
             .arg(&self.cfg.iface)
@@ -133,6 +134,7 @@ impl Radio {
             .arg(ch.to_string())
             .output()
             .map_err(|e| Error::Io(format!("iw spawn: {e}")))?;
+        tracing::debug!(stdout = %String::from_utf8_lossy(&out.stdout), stderr = %String::from_utf8_lossy(&out.stderr), "iw output");
         if !out.status.success() {
             return Err(Error::Io(format!(
                 "iw failed: {}",
