@@ -1,9 +1,11 @@
 <script>
   import { onMount } from 'svelte';
-  import Metrics from './lib/Metrics.svelte';
-  import NodeList from './lib/NodeList.svelte';
-  import MessageLog from './lib/MessageLog.svelte';
-  import SendBox from './lib/SendBox.svelte';
+  import Sidebar from './lib/Sidebar.svelte';
+  import StatusBar from './lib/StatusBar.svelte';
+  import TopologyView from './lib/TopologyView.svelte';
+  import NodeGrid from './lib/NodeGrid.svelte';
+  import PacketLog from './lib/PacketLog.svelte';
+  import Composer from './lib/Composer.svelte';
 
   let data = {
     local_id: 0,
@@ -12,6 +14,22 @@
   };
 
   let connected = false;
+  let screen = "topology";
+  const setScreen = (s) => screen = s;
+  let selectedNode = null;
+  let lastResult = null;
+  let timeStr = "00:00:00";
+
+  // Clock
+  onMount(() => {
+    const updateTime = () => {
+      const now = new Date();
+      timeStr = now.toISOString().split('T')[1].split('.')[0];
+    };
+    updateTime();
+    const interval = setInterval(updateTime, 1000);
+    return () => clearInterval(interval);
+  });
 
   async function fetchData() {
     try {
@@ -32,47 +50,101 @@
     const interval = setInterval(fetchData, 500);
     return () => clearInterval(interval);
   });
+
+  function getPrrState(prr) {
+    if (prr >= 0.76) return "ok";
+    if (prr >= 0.26) return "relay";
+    return "lost";
+  }
+
+  $: nodes = (() => {
+    const hubId = "HUB";
+    const result = [{
+      id: hubId,
+      label: `N-${data.local_id.toString().padStart(2, '0')}`,
+      prr: 1.0,
+      state: "ok",
+      dbm: 0,
+      hops: 0,
+      x: 50,
+      y: 50
+    }];
+
+    const N = data.neighbors.length;
+    data.neighbors.forEach((n, i) => {
+      const angle = (i / N) * 2 * Math.PI;
+      const radius = 30; // percentage
+      result.push({
+        id: `N-${n.id.toString().padStart(2, '0')}`,
+        label: `N-${n.id.toString().padStart(2, '0')}`,
+        prr: n.prr,
+        state: getPrrState(n.prr),
+        dbm: n.rssi_dbm,
+        hops: 1, // Default to 1 hop (direct); mesh topology routing not yet exported to UI
+        x: 50 + radius * Math.cos(angle),
+        y: 50 + radius * Math.sin(angle)
+      });
+    });
+
+    return result;
+  })();
+
+  $: formattedMessages = data.messages.map((m, i) => {
+    const d = new Date(m.timestamp * 1000);
+    const nodeLabel = `N-${m.source.toString().padStart(2, '0')}`;
+    const sourceNode = nodes.find(n => n.label === nodeLabel);
+    
+    return {
+      id: m.id || i,
+      time: d.toISOString().split('T')[1].split('.')[0],
+      node: nodeLabel,
+      nodeState: sourceNode ? sourceNode.state : "ok",
+      kind: "data",
+      payload: m.text,
+      result: "RECV"
+    };
+  }).reverse();
+
+  $: lastEvent = formattedMessages.length > 0 
+    ? `${formattedMessages[0].node} · ${formattedMessages[0].kind} · ${formattedMessages[0].result}` 
+    : "No recent events";
+
+  async function handleSend({ target, kind, text }) {
+    // Send to API
+    try {
+      const res = await fetch('/api/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text })
+      });
+      if (res.ok) {
+        lastResult = { result: "OK", message: `Packet committed → ${target}.` };
+      } else {
+        lastResult = { result: "LOST", message: `Packet lost on ${target}. Retry in 200ms.` };
+      }
+    } catch (e) {
+      lastResult = { result: "LOST", message: `Network error. Failed to send.` };
+    }
+    setTimeout(() => lastResult = null, 4000);
+  }
 </script>
 
-<main class="min-h-screen p-4 md:p-8 space-y-6">
-  <!-- Header -->
-  <header class="flex justify-between items-center border-b border-[#00ff41]/30 pb-4">
-    <div>
-      <h1 class="text-2xl font-bold tracking-widest neon-glow">LITM TACTICAL MESH</h1>
-      <p class="text-xs opacity-60">STATION ID: {data.local_id} | NODE_ID_{data.local_id.toString().padStart(3, '0')}</p>
-    </div>
-    <div class="flex items-center space-x-2">
-      <div class={`w-3 h-3 rounded-full ${connected ? 'bg-[#00ff41] animate-pulse' : 'bg-red-600'}`}></div>
-      <span class="text-xs uppercase font-bold">{connected ? 'System Online' : 'System Offline'}</span>
-    </div>
-  </header>
-
-  <!-- Grid Layout -->
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-    <!-- Left Column: Metrics & Send -->
-    <div class="space-y-6">
-      <Metrics {data} />
-      <SendBox />
-    </div>
-
-    <!-- Middle Column: Node Graph / List -->
-    <div class="lg:col-span-2 space-y-6">
-      <div class="glass-card p-4 min-h-[400px]">
-        <h2 class="text-sm font-bold uppercase mb-4 opacity-70">Active Neighbors</h2>
-        <NodeList neighbors={data.neighbors} />
-      </div>
-      
-      <div class="glass-card p-4">
-        <h2 class="text-sm font-bold uppercase mb-4 opacity-70">Signal Log</h2>
-        <MessageLog messages={data.messages} />
-      </div>
+<div class="shell">
+  <Sidebar {screen} {setScreen} {nodes} />
+  
+  <StatusBar time={timeStr} {lastEvent} onSend={() => screen = "uplink"} nodesCount={nodes.length} />
+  
+  <div class="shell-main">
+    <div style="flex:1;min-height:0;display:flex;position:relative;flex-direction:column">
+        {#if screen === "topology"}
+          <TopologyView {nodes} selected={selectedNode} setSelected={(n) => selectedNode = n} />
+        {:else if screen === "nodes"}
+          <NodeGrid {nodes} selected={selectedNode} setSelected={(n) => selectedNode = n} />
+        {:else if screen === "uplink"}
+          <Composer {nodes} onSend={handleSend} {lastResult} />
+        {:else if screen === "log"}
+          <PacketLog entries={formattedMessages} />
+        {/if}
     </div>
   </div>
-</main>
-
-<style>
-  :global(*) {
-    scrollbar-width: thin;
-    scrollbar-color: #00ff41 #0a0a0a;
-  }
-</style>
+</div>

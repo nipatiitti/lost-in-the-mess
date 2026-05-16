@@ -1,3 +1,6 @@
 /target
 Person_B_plan.md
 Cargo.lock
+node_modules/
+dist/
+.DS_Store
