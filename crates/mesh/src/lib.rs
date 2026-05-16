@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct BeaconPayload {
     pub epoch: u32,
+    pub beacon_seq: u32,
     pub neighbors_heard: Vec<(NodeId, u8)>, // (NodeId, PRR * 255)
     pub decoded: ObjectBitmap,
 }
@@ -19,7 +20,7 @@ struct NeighborState {
     prr: f32,
     last_seen: Instant,
     bitmap: ObjectBitmap,
-    expected_counter: Option<u64>,
+    expected_beacon_seq: Option<u32>,
 }
 
 pub struct MeshService {
@@ -48,7 +49,6 @@ impl MeshService {
 
         Self::spawn_flooding_task(Arc::clone(&transport), Kind::Fec);
         Self::spawn_flooding_task(Arc::clone(&transport), Kind::Control);
-        Self::spawn_channel_hopper(Arc::clone(&transport));
 
         service
     }
@@ -61,11 +61,13 @@ impl MeshService {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_millis(50));
             let mut next_beacon = Instant::now() + Duration::from_millis(500);
+            let mut beacon_seq: u32 = 0;
 
             loop {
                 interval.tick().await;
                 if Instant::now() >= next_beacon {
-                    let epoch = 0; // TODO: obtain real epoch if implemented
+                    // TODO: use transport epoch when the Transport trait exposes it
+                    let epoch = 0u32;
 
                     let neighbors_heard = {
                         let table = neighbor_table.read().unwrap();
@@ -81,6 +83,7 @@ impl MeshService {
 
                     let payload = BeaconPayload {
                         epoch,
+                        beacon_seq,
                         neighbors_heard,
                         decoded,
                     };
@@ -89,6 +92,7 @@ impl MeshService {
                         let _ = transport.broadcast(Kind::Beacon, &encoded);
                     }
 
+                    beacon_seq = beacon_seq.wrapping_add(1);
                     let jitter = rand::thread_rng().gen_range(450..=550);
                     next_beacon = Instant::now() + Duration::from_millis(jitter);
                 }
@@ -101,31 +105,41 @@ impl MeshService {
         delivery: Arc<dyn Delivery>,
         neighbor_table: Arc<RwLock<HashMap<NodeId, NeighborState>>>,
     ) {
+        let local_id = transport.local_id();
         let mut rx = transport.subscribe(Kind::Beacon);
         tokio::spawn(async move {
             while let Some((meta, payload)) = rx.recv().await {
+                if meta.sender_id == local_id {
+                    continue;
+                }
                 if let Ok(beacon) = postcard::from_bytes::<BeaconPayload>(&payload) {
                     let mut table = neighbor_table.write().unwrap();
                     let state = table.entry(meta.sender_id).or_insert(NeighborState {
-                        prr: 0.0,
+                        prr: 1.0,
                         last_seen: Instant::now(),
                         bitmap: beacon.decoded,
-                        expected_counter: None,
+                        expected_beacon_seq: None,
                     });
 
                     state.last_seen = Instant::now();
                     state.bitmap = beacon.decoded;
 
-                    if let Some(expected) = state.expected_counter {
-                        if meta.counter >= expected {
-                            let total = (meta.counter - expected + 1) as f32;
-                            let inst_prr = 1.0 / total;
-                            state.prr = state.prr * 0.8 + inst_prr * 0.2;
+                    match state.expected_beacon_seq {
+                        None => {
+                            state.prr = 1.0;
                         }
-                    } else {
-                        state.prr = 1.0;
+                        Some(expected) => {
+                            if beacon.beacon_seq >= expected {
+                                let gap = (beacon.beacon_seq - expected + 1) as f32;
+                                let inst_prr = 1.0 / gap;
+                                state.prr = (state.prr * 0.8 + inst_prr * 0.2).clamp(0.0, 1.0);
+                            } else {
+                                // Sequence reset (peer restarted) — re-initialise
+                                state.prr = 1.0;
+                            }
+                        }
                     }
-                    state.expected_counter = Some(meta.counter + 1);
+                    state.expected_beacon_seq = Some(beacon.beacon_seq.wrapping_add(1));
 
                     delivery.note_peer_coverage(meta.sender_id, beacon.decoded);
                 }
@@ -141,7 +155,9 @@ impl MeshService {
                 let now = Instant::now();
                 let mut table = neighbor_table.write().unwrap();
                 table.retain(|_, state| {
-                    now.duration_since(state.last_seen) <= Duration::from_millis(1500)
+                    // 4 × max-jitter beacon interval (4 × 550 ms) so jitter alone cannot
+                    // trigger spurious eviction
+                    now.duration_since(state.last_seen) <= Duration::from_millis(2200)
                 });
             }
         });
@@ -204,40 +220,7 @@ impl MeshService {
         });
     }
 
-    fn spawn_channel_hopper(transport: Arc<dyn Transport>) {
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(200));
-            let root_key = b"hardcoded-root-key-for-demo-----"; // 32 bytes
-            let available_channels = vec![1, 6, 11, 36, 40, 44, 48]; // standard 2.4/5GHz channels
 
-            loop {
-                interval.tick().await;
-                
-                let epoch = 0u32;
-                let slot = (std::time::SystemTime::now()
-                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                    .unwrap_or(Duration::default())
-                    .as_millis() / 200) as u32;
-
-                use hkdf::Hkdf;
-                use sha2::Sha256;
-
-                let hkdf = Hkdf::<Sha256>::new(None, root_key);
-                let mut info = Vec::new();
-                info.extend_from_slice(b"hop");
-                info.extend_from_slice(&epoch.to_le_bytes());
-                info.extend_from_slice(&slot.to_le_bytes());
-
-                let mut okm = [0u8; 4];
-                if hkdf.expand(&info, &mut okm).is_ok() {
-                    let rand_val = u32::from_le_bytes(okm);
-                    let ch_idx = (rand_val as usize) % available_channels.len();
-                    let ch = available_channels[ch_idx];
-                    let _ = transport.set_channel(ch);
-                }
-            }
-        });
-    }
 }
 
 impl Mesh for MeshService {
