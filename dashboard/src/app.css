@@ -150,7 +150,7 @@
 
 * { box-sizing: border-box; }
 
-html, body, #root {
+html, body, #app {
   margin: 0;
   height: 100%;
   background: var(--ink-050);

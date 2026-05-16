@@ -16,6 +16,7 @@
 
   let connected = false;
   let screen = "topology";
+  const setScreen = (s) => screen = s;
   let selectedNode = null;
   let lastResult = null;
   let timeStr = "00:00:00";
