@@ -1,5 +1,5 @@
 use litm_common::{
-    Delivery, Kind, Mesh, NeighborInfo, NodeId, ObjectBitmap, Result, Transport,
+    Delivery, Kind, Mesh, NeighborInfo, NodeId, ObjectBitmap, Transport,
 };
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -23,17 +23,14 @@ struct NeighborState {
 }
 
 pub struct MeshService {
-    local_id: NodeId,
     neighbor_table: Arc<RwLock<HashMap<NodeId, NeighborState>>>,
 }
 
 impl MeshService {
     pub fn new(transport: Arc<dyn Transport>, delivery: Arc<dyn Delivery>) -> Arc<Self> {
-        let local_id = transport.local_id();
         let neighbor_table = Arc::new(RwLock::new(HashMap::new()));
 
         let service = Arc::new(Self {
-            local_id,
             neighbor_table: Arc::clone(&neighbor_table),
         });
 
@@ -109,7 +106,7 @@ impl MeshService {
             while let Some((meta, payload)) = rx.recv().await {
                 if let Ok(beacon) = postcard::from_bytes::<BeaconPayload>(&payload) {
                     let mut table = neighbor_table.write().unwrap();
-                    let mut state = table.entry(meta.sender_id).or_insert(NeighborState {
+                    let state = table.entry(meta.sender_id).or_insert(NeighborState {
                         prr: 0.0,
                         last_seen: Instant::now(),
                         bitmap: beacon.decoded,

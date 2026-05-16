@@ -1,12 +1,12 @@
 use clap::{Parser, Subcommand};
 use litm_common::{
-    Delivery, Kind, NodeId, PacketMeta, Result, SendPolicy,
+    DeliveredObject, Delivery, Kind, NodeId, ObjectBitmap, PacketMeta, Result, SendPolicy,
     Transport,
 };
 use litm_delivery::RaptorQDelivery;
 use litm_mesh::MeshService;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
@@ -39,7 +39,14 @@ impl MockTransport {
             #[cfg(unix)]
             socket2.set_reuse_port(true).unwrap();
             socket2.set_broadcast(true).unwrap();
-            socket2.bind(&"0.0.0.0:9999".parse::<std::net::SocketAddr>().unwrap().into()).unwrap();
+            socket2
+                .bind(
+                    &"0.0.0.0:9999"
+                        .parse::<std::net::SocketAddr>()
+                        .unwrap()
+                        .into(),
+                )
+                .unwrap();
             socket2.set_nonblocking(true).unwrap();
             UdpSocket::from_std(socket2.into()).unwrap()
         };
@@ -76,7 +83,8 @@ impl MockTransport {
                     sid_bytes.copy_from_slice(&buf[0..4]);
                     let sender_id = u32::from_le_bytes(sid_bytes);
 
-                    if sender_id == self_ref.local_id || self_ref.ignored_nodes.contains(&sender_id) {
+                    if sender_id == self_ref.local_id || self_ref.ignored_nodes.contains(&sender_id)
+                    {
                         continue;
                     }
 
@@ -102,9 +110,15 @@ impl MockTransport {
                     let payload = buf[13..len].to_vec();
 
                     match kind {
-                        Kind::Beacon => { let _ = self_ref.tx_beacon.send((meta, payload)); }
-                        Kind::Fec => { let _ = self_ref.tx_fec.send((meta, payload)); }
-                        Kind::Control => { let _ = self_ref.tx_control.send((meta, payload)); }
+                        Kind::Beacon => {
+                            let _ = self_ref.tx_beacon.send((meta, payload));
+                        }
+                        Kind::Fec => {
+                            let _ = self_ref.tx_fec.send((meta, payload));
+                        }
+                        Kind::Control => {
+                            let _ = self_ref.tx_control.send((meta, payload));
+                        }
                     }
                 }
             }
@@ -154,8 +168,6 @@ impl Transport for MockTransport {
     }
 }
 
-
-
 #[derive(Parser)]
 struct Cli {
     #[command(subcommand)]
@@ -196,6 +208,7 @@ async fn main() {
     match cli.command {
         Commands::Launcher { nodes } => {
             info!("Launching {} nodes", nodes);
+            let mut children = Vec::new();
             for i in 1..=nodes {
                 let id = i as NodeId;
                 let mut ignore = Vec::new();
@@ -213,10 +226,23 @@ async fn main() {
                 if !ignore_str.is_empty() {
                     cmd.arg("--ignore").arg(ignore_str);
                 }
-                cmd.spawn().expect("failed to spawn node");
+                let child = cmd.spawn().expect("failed to spawn node");
+                children.push(child);
             }
-            // Sleep forever
-            std::future::pending::<()>().await;
+
+            info!("All nodes launched. Press Ctrl+C to stop.");
+
+            // Wait for Ctrl+C
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    info!("Shutting down nodes...");
+                }
+                _ = std::future::pending::<()>() => {}
+            }
+
+            for mut child in children {
+                let _ = child.kill();
+            }
         }
         Commands::Node { id, ignore } => {
             info!("Starting Node {}", id);
@@ -227,18 +253,43 @@ async fn main() {
 
             let transport = MockTransport::new(id, ignored_nodes).await;
             let delivery = RaptorQDelivery::new(Arc::clone(&transport));
-            let _mesh = MeshService::new(Arc::clone(&transport) as Arc<dyn Transport>, delivery.clone());
+            let _mesh = MeshService::new(
+                Arc::clone(&transport) as Arc<dyn Transport>,
+                delivery.clone(),
+            );
 
             // Command socket for send-image
-            let listener = TcpListener::bind(format!("127.0.0.1:{}", 10000 + id)).await.unwrap();
-            
+            let listener = {
+                let socket = socket2::Socket::new(
+                    socket2::Domain::IPV4,
+                    socket2::Type::STREAM,
+                    Some(socket2::Protocol::TCP),
+                )
+                .unwrap();
+                socket.set_reuse_address(true).unwrap();
+                socket
+                    .bind(
+                        &format!("127.0.0.1:{}", 10000 + id)
+                            .parse::<std::net::SocketAddr>()
+                            .unwrap()
+                            .into(),
+                    )
+                    .unwrap();
+                socket.listen(128).unwrap();
+                socket.set_nonblocking(true).unwrap();
+                TcpListener::from_std(socket.into()).unwrap()
+            };
+
             // Wait for commands
             while let Ok((mut stream, _)) = listener.accept().await {
                 let mut buf = [0; 1024];
                 if let Ok(n) = stream.read(&mut buf).await {
                     let cmd_str = String::from_utf8_lossy(&buf[..n]);
                     if cmd_str.starts_with("send-image") {
-                        info!("Node {} triggering real RaptorQ send_object (fake image)", id);
+                        info!(
+                            "Node {} triggering real RaptorQ send_object (fake image)",
+                            id
+                        );
                         let _ = delivery.send_object(
                             rand::random(),
                             vec![0xAA; 5000], // 5KB fake image
@@ -258,7 +309,9 @@ async fn main() {
         }
         Commands::SendImage { id, path } => {
             if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{}", 10000 + id)).await {
-                let _ = stream.write_all(format!("send-image {}", path).as_bytes()).await;
+                let _ = stream
+                    .write_all(format!("send-image {}", path).as_bytes())
+                    .await;
                 info!("Triggered send-image on node {}", id);
             } else {
                 warn!("Failed to connect to node {}", id);
@@ -266,7 +319,9 @@ async fn main() {
         }
         Commands::SendText { id, message } => {
             if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{}", 10000 + id)).await {
-                let _ = stream.write_all(format!("send-text {}", message).as_bytes()).await;
+                let _ = stream
+                    .write_all(format!("send-text {}", message).as_bytes())
+                    .await;
                 info!("Triggered send-text on node {}", id);
             } else {
                 warn!("Failed to connect to node {}", id);
