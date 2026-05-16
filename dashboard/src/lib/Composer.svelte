@@ -163,6 +163,13 @@
     imagePreview = null;
   }
 
+  function handleKeydown(e) {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      handleSend();
+    }
+  }
+
   onDestroy(() => {
     stopStreaming();
     stopCamera();
@@ -231,12 +238,15 @@
     <div style="margin-bottom:18px">
       <div class="stamp" style="font-size:9px;margin-bottom:8px">PAYLOAD</div>
       {#if kind === "text"}
-        <textarea bind:value={text} placeholder="Type message..."
+        <textarea bind:value={text} on:keydown={handleKeydown} placeholder="Type message..."
           style="
             width:100%;min-height:88px;background:var(--ink-100);border:1px solid var(--border);
             border-radius:2px;padding:12px 14px;color:var(--bone-100);
             font-family:var(--font-mono);font-size:13px;outline:none;resize:vertical;
           "></textarea>
+        <div class="stamp" style="font-size:9px;margin-top:6px;text-align:right;opacity:0.6">
+          PRESS ⌘ + ENTER OR CTRL + ENTER TO TRANSMIT
+        </div>
       {:else if kind === "image"}
         <div style="position:relative">
           <input type="file" accept="image/*" on:change={handleFileSelect} 
