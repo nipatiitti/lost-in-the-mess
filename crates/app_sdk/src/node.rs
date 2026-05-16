@@ -49,12 +49,19 @@ impl Node {
     }
 
     pub fn radio_info(&self) -> RadioInfo {
+        let ch = self.mesh.current_channel();
         RadioInfo {
-            channel: 6,
-            frequency_mhz: 2437,
+            channel: ch as u32,
+            frequency_mhz: 2407 + (ch as u32) * 5,
             width_mhz: 20,
             txpower_dbm: 22.0,
         }
+    }
+
+    /// Broadcast a coordinated channel-switch control packet to all mesh nodes.
+    /// The switch is applied at `current_epoch + 1` on every node that receives it.
+    pub fn request_channel_hop(&self, channel: u8) -> Result<()> {
+        self.mesh.request_channel_hop(channel).map_err(SdkError::Stack)
     }
 
     // --- sending ---
@@ -225,6 +232,12 @@ mod tests {
         }
         fn topology(&self) -> HashMap<NodeId, Vec<(NodeId, f32)>> {
             HashMap::new()
+        }
+        fn request_channel_hop(&self, _next_channel: u8) -> CommonResult<()> {
+            Ok(())
+        }
+        fn current_channel(&self) -> u8 {
+            6
         }
     }
 

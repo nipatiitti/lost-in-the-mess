@@ -2,7 +2,7 @@ use axum::{
     Router,
     body::Body,
     extract::{
-        Json, Path, State,
+        DefaultBodyLimit, Json, Path, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     response::IntoResponse,
@@ -68,6 +68,11 @@ struct SendVideoFrameRequest {
     width: u16,
     height: u16,
     data: String, // base64-encoded JPEG
+}
+
+#[derive(Deserialize)]
+struct ChannelHopRequest {
+    channel: u8,
 }
 
 async fn get_data(State(state): State<AppState>) -> Json<GodData> {
@@ -212,6 +217,20 @@ async fn raptor_ws_handler(
     })
 }
 
+async fn channel_hop(
+    State(state): State<AppState>,
+    Json(req): Json<ChannelHopRequest>,
+) -> Json<serde_json::Value> {
+    info!("Channel hop requested to CH{}", req.channel);
+    match state.node.request_channel_hop(req.channel) {
+        Ok(_) => Json(serde_json::json!({ "status": "ok" })),
+        Err(e) => {
+            tracing::error!("Channel hop failed: {}", e);
+            Json(serde_json::json!({ "status": "error", "message": e.to_string() }))
+        }
+    }
+}
+
 fn parse_data_uri(uri: &str) -> Option<(String, Vec<u8>)> {
     if !uri.starts_with("data:") {
         return None;
@@ -343,10 +362,11 @@ async fn main() {
 
     let app = Router::new()
         .route("/api/data", get(get_data))
-        .route("/api/send", post(send_message))
+        .route("/api/send", post(send_message).layer(DefaultBodyLimit::max(20 * 1024 * 1024)))
         .route("/api/video/frame", post(send_video_frame))
         .route("/api/video/stream/:id", get(get_video_stream))
         .route("/api/raptor/ws", get(raptor_ws_handler))
+        .route("/api/channel/hop", post(channel_hop))
         .layer(CorsLayer::permissive())
         .with_state(state);
 

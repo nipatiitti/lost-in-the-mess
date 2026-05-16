@@ -208,41 +208,6 @@
       Push a payload into the swarm
     </div>
 
-    <!-- Target picker -->
-    <div style="margin-bottom:18px">
-      <div class="stamp" style="font-size:9px;margin-bottom:8px">
-        TARGET NODE
-      </div>
-      <div style="display:flex;flex-wrap:wrap;gap:6px">
-        {#each nodes.filter((n) => n.id !== "HUB") as n}
-          {@const active = target === n.id}
-          {@const c = colorForState(n.state)}
-          <button
-            on:click={() => (target = n.id)}
-            style="
-              padding:6px 10px;
-              border:1px solid {active ? c : 'var(--border)'};
-              background: {active
-              ? `rgba(${rgbOfTone(chipToneForState(n.state))},0.08)`
-              : 'transparent'};
-              color: {active ? c : 'var(--bone-200)'};
-              font-family:var(--font-mono);font-size:11px;letter-spacing:0.08em;
-              border-radius:2px;cursor:pointer;
-              display:flex;align-items:center;gap:6px;
-            "
-          >
-            <span
-              style="width:6px;height:6px;border-radius:50%;background:{c};box-shadow: {active
-                ? `0 0 6px ${c}`
-                : 'none'}"
-            ></span>
-            {n.label}
-            <span style="opacity:0.6">· {n.prr.toFixed(2)}</span>
-          </button>
-        {/each}
-      </div>
-    </div>
-
     <!-- Kind picker -->
     <div style="margin-bottom:18px">
       <div class="stamp" style="font-size:9px;margin-bottom:8px">

@@ -35,7 +35,10 @@
     return () => clearInterval(interval);
   });
 
+  let fetching = false;
   async function fetchData() {
+    if (fetching) return;
+    fetching = true;
     try {
       const res = await fetch('/api/data');
       if (res.ok) {
@@ -46,6 +49,8 @@
       }
     } catch (e) {
       connected = false;
+    } finally {
+      fetching = false;
     }
   }
 

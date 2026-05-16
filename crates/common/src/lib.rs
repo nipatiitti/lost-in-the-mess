@@ -46,8 +46,17 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Kind {
     Beacon = 0,  // mesh -> mesh
     Fec = 1,     // delivery -> delivery
-    Control = 2, // app -> app (rekey, eviction, debug)
+    Control = 2, // mesh -> mesh (channel hop, rekey, eviction)
     Video = 3,   // unreliable video bypass — no FEC, no ACK, fire-and-forget
+}
+
+// ---------- Control message payload ----------
+// Postcard-serialized, lives inside a Kind::Control encrypted envelope.
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ControlPayload {
+    /// Coordinated channel switch: all nodes apply at `at_epoch` boundary.
+    ChannelSwitch { next_channel: u8, at_epoch: Epoch },
 }
 
 // ---------- Per-packet metadata ----------
@@ -160,4 +169,8 @@ pub trait Delivery: Send + Sync + 'static {
 pub trait Mesh: Send + Sync + 'static {
     fn neighbors(&self) -> Vec<NeighborInfo>;
     fn topology(&self) -> std::collections::HashMap<NodeId, Vec<(NodeId, f32)>>;
+    /// Broadcast a coordinated channel-switch; all nodes apply at `current_epoch + 1`.
+    fn request_channel_hop(&self, next_channel: u8) -> Result<()>;
+    /// Current radio channel (updated after each coordinated hop applies).
+    fn current_channel(&self) -> u8;
 }

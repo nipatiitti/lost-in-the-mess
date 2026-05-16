@@ -136,7 +136,8 @@ impl Radio {
 
     pub fn set_channel(&self, ch: u8) -> Result<()> {
         tracing::info!(iface = %self.cfg.iface, channel = ch, "switching channel");
-        let out = Command::new("iw")
+        let out = Command::new("sudo")
+            .arg("iw")
             .arg("dev")
             .arg(&self.cfg.iface)
             .arg("set")

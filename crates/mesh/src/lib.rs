@@ -1,10 +1,12 @@
-use litm_common::{Delivery, Epoch, Kind, Mesh, NeighborInfo, NodeId, ObjectBitmap, Transport};
+use litm_common::{
+    ControlPayload, Delivery, Epoch, Kind, Mesh, NeighborInfo, NodeId, ObjectBitmap, Transport,
+};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct BeaconPayload {
@@ -35,20 +37,28 @@ fn rssi_to_prr(rssi: i8) -> Option<f32> {
 }
 
 pub struct MeshService {
+    transport: Arc<dyn Transport>,
     neighbor_table: Arc<RwLock<HashMap<NodeId, NeighborState>>>,
     /// link_state[node_id] = that node's own neighbor list (from its most recent beacon).
     /// Enables building the full topology graph for Dijkstra routing.
     link_state: Arc<RwLock<HashMap<NodeId, Vec<(NodeId, u8)>>>>,
+    pending_channel_switch: Arc<RwLock<Option<(u8, Epoch)>>>,
+    current_channel: Arc<AtomicU8>,
 }
 
 impl MeshService {
     pub fn new(transport: Arc<dyn Transport>, delivery: Arc<dyn Delivery>) -> Arc<Self> {
         let neighbor_table = Arc::new(RwLock::new(HashMap::new()));
         let link_state = Arc::new(RwLock::new(HashMap::new()));
+        let pending_channel_switch = Arc::new(RwLock::new(None));
+        let current_channel = Arc::new(AtomicU8::new(6));
 
         let service = Arc::new(Self {
+            transport: Arc::clone(&transport),
             neighbor_table: Arc::clone(&neighbor_table),
             link_state: Arc::clone(&link_state),
+            pending_channel_switch: Arc::clone(&pending_channel_switch),
+            current_channel: Arc::clone(&current_channel),
         });
 
         Self::spawn_beacon_sender(
@@ -66,6 +76,15 @@ impl MeshService {
 
         Self::spawn_flooding_task(Arc::clone(&transport), Kind::Fec);
         Self::spawn_flooding_task(Arc::clone(&transport), Kind::Control);
+        Self::spawn_control_handler(
+            Arc::clone(&transport),
+            Arc::clone(&pending_channel_switch),
+        );
+        Self::spawn_channel_switch_watcher(
+            Arc::clone(&transport),
+            Arc::clone(&pending_channel_switch),
+            Arc::clone(&current_channel),
+        );
 
         service
     }
@@ -234,6 +253,55 @@ impl MeshService {
         });
     }
 
+    fn spawn_control_handler(
+        transport: Arc<dyn Transport>,
+        pending: Arc<RwLock<Option<(u8, Epoch)>>>,
+    ) {
+        let mut rx = transport.subscribe(Kind::Control);
+        tokio::spawn(async move {
+            while let Some((_meta, payload)) = rx.recv().await {
+                match postcard::from_bytes::<ControlPayload>(&payload) {
+                    Ok(ControlPayload::ChannelSwitch { next_channel, at_epoch }) => {
+                        tracing::info!(
+                            channel = next_channel,
+                            at_epoch,
+                            "channel switch scheduled from peer"
+                        );
+                        *pending.write().unwrap() = Some((next_channel, at_epoch));
+                    }
+                    Err(e) => {
+                        tracing::debug!("unknown control payload: {}", e);
+                    }
+                }
+            }
+        });
+    }
+
+    fn spawn_channel_switch_watcher(
+        transport: Arc<dyn Transport>,
+        pending: Arc<RwLock<Option<(u8, Epoch)>>>,
+        current_channel: Arc<AtomicU8>,
+    ) {
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(200));
+            loop {
+                interval.tick().await;
+                let snapshot = *pending.read().unwrap();
+                if let Some((ch, at_epoch)) = snapshot {
+                    if current_epoch() >= at_epoch {
+                        if let Err(e) = transport.set_channel(ch) {
+                            tracing::error!(channel = ch, "set_channel failed: {}", e);
+                        } else {
+                            current_channel.store(ch, Ordering::Relaxed);
+                            tracing::info!(channel = ch, "coordinated channel switch applied");
+                        }
+                        *pending.write().unwrap() = None;
+                    }
+                }
+            }
+        });
+    }
+
     fn spawn_flooding_task(transport: Arc<dyn Transport>, kind: Kind) {
         let seen_hashes: Arc<RwLock<HashMap<[u8; 32], (u32, Instant)>>> =
             Arc::new(RwLock::new(HashMap::new()));
@@ -336,6 +404,20 @@ impl Mesh for MeshService {
                 (*src, converted)
             })
             .collect()
+    }
+
+    fn request_channel_hop(&self, next_channel: u8) -> litm_common::Result<()> {
+        let at_epoch = current_epoch() + 1;
+        // Schedule locally — we won't receive our own broadcast back.
+        *self.pending_channel_switch.write().unwrap() = Some((next_channel, at_epoch));
+        tracing::info!(channel = next_channel, at_epoch, "broadcasting channel switch");
+        let payload = postcard::to_allocvec(&ControlPayload::ChannelSwitch { next_channel, at_epoch })
+            .map_err(|e| litm_common::Error::Other(e.to_string()))?;
+        self.transport.broadcast(Kind::Control, &payload)
+    }
+
+    fn current_channel(&self) -> u8 {
+        self.current_channel.load(Ordering::Relaxed)
     }
 }
 

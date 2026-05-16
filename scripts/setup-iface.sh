@@ -7,6 +7,6 @@ sudo ip link set "$NIC" down
 sudo iw dev "$NIC" set type monitor
 sudo ip link set "$NIC" up
 sudo iw dev "$NIC" set channel "$CH" HT20
-sudo iw dev "$NIC" set txpower fixed 2300
+sudo iw dev "$NIC" set txpower fixed 100
 sudo iw dev "$NIC" set power_save off
 iw dev "$NIC" info
