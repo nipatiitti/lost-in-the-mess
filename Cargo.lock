@@ -3,21 +3,21 @@
 version = 4
 
 [[package]]
-name = "app"
+name = "litm-app"
 version = "0.1.0"
 
 [[package]]
-name = "common"
+name = "litm-common"
 version = "0.1.0"
 
 [[package]]
-name = "delivery"
+name = "litm-delivery"
 version = "0.1.0"
 
 [[package]]
-name = "mesh"
+name = "litm-mesh"
 version = "0.1.0"
 
 [[package]]
-name = "transport"
+name = "litm-transport"
 version = "0.1.0"
