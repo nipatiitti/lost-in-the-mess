@@ -26,8 +26,13 @@ struct NeighborState {
 
 /// Maps raw RSSI from the RTL8812AU to a [0.0, 1.0] quality estimate.
 /// -90 dBm → 0.0 (dead), -50 dBm → 1.0 (excellent), linear between.
-fn rssi_to_prr(rssi: i8) -> f32 {
-    ((rssi as f32 + 90.0) / 40.0).clamp(0.0, 1.0)
+/// Returns None when rssi ≤ -100 dBm, which is the driver sentinel for "not available".
+fn rssi_to_prr(rssi: i8) -> Option<f32> {
+    if rssi <= -100 {
+        None
+    } else {
+        Some(((rssi as f32 + 90.0) / 40.0).clamp(0.0, 1.0))
+    }
 }
 
 pub struct MeshService {
@@ -176,19 +181,21 @@ impl MeshService {
                             None => {
                                 // First beacon: use RSSI as the quality signal since we have
                                 // no delivery history yet (no missed beacons to count).
-                                let inst_prr = rssi_to_prr(meta.rssi_dbm);
+                                // Fall back to neutral (0.5) if RSSI is unavailable.
+                                let inst_prr = rssi_to_prr(meta.rssi_dbm).unwrap_or(0.5);
                                 state.prr = (state.prr * 0.3 + inst_prr * 0.7).clamp(0.0, 1.0);
                             }
                             Some(expected) => {
                                 if beacon.beacon_seq >= expected {
                                     let gap = (beacon.beacon_seq - expected + 1) as f32;
                                     let delivery_prr = 1.0 / gap;
-                                    let rssi_prr = rssi_to_prr(meta.rssi_dbm);
                                     // Conservative blend: report the worse of radio signal
-                                    // quality and actual delivery ratio.  A high-RSSI link
-                                    // that's dropping beacons stays low; a low-RSSI link
-                                    // that's somehow delivering stays low too.
-                                    let inst_prr = f32::min(rssi_prr, delivery_prr);
+                                    // quality and actual delivery ratio. Falls back to
+                                    // delivery-only when RSSI is unavailable (-128 sentinel).
+                                    let inst_prr = match rssi_to_prr(meta.rssi_dbm) {
+                                        Some(rssi_prr) => f32::min(rssi_prr, delivery_prr),
+                                        None => delivery_prr,
+                                    };
                                     state.prr =
                                         (state.prr * 0.3 + inst_prr * 0.7).clamp(0.0, 1.0);
                                 } else {
@@ -338,7 +345,7 @@ fn compute_prr(
 ) -> (f32, Option<u32>) {
     match expected_seq {
         None => {
-            let inst_prr = rssi_to_prr(rssi_dbm);
+            let inst_prr = rssi_to_prr(rssi_dbm).unwrap_or(0.5);
             let new_prr = (current_prr * 0.3 + inst_prr * 0.7).clamp(0.0, 1.0);
             (new_prr, Some(received_seq.wrapping_add(1)))
         }
@@ -346,8 +353,10 @@ fn compute_prr(
             if received_seq >= expected {
                 let gap = (received_seq - expected + 1) as f32;
                 let delivery_prr = 1.0 / gap;
-                let rssi_prr = rssi_to_prr(rssi_dbm);
-                let inst_prr = f32::min(rssi_prr, delivery_prr);
+                let inst_prr = match rssi_to_prr(rssi_dbm) {
+                    Some(rssi_prr) => f32::min(rssi_prr, delivery_prr),
+                    None => delivery_prr,
+                };
                 let new_prr = (current_prr * 0.3 + inst_prr * 0.7).clamp(0.0, 1.0);
                 (new_prr, Some(received_seq.wrapping_add(1)))
             } else {
@@ -401,7 +410,7 @@ mod tests {
         // Good delivery (gap=1) but weak RSSI (-80 dBm → rssi_prr=0.25).
         // min(0.25, 1.0) = 0.25 → RSSI caps the reported PRR.
         let rssi: i8 = -80;
-        let rssi_prr = rssi_to_prr(rssi); // (−80 + 90) / 40 = 0.25
+        let rssi_prr = rssi_to_prr(rssi).unwrap(); // (−80 + 90) / 40 = 0.25
         let (prr, next) = compute_prr(0.5, Some(0), 0, rssi);
         let expected_prr = 0.5f32 * 0.3 + rssi_prr * 0.7;
         assert!((prr - expected_prr).abs() < 1e-5, "prr={}", prr);
