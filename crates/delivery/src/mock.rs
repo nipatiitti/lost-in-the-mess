@@ -1,5 +1,6 @@
 use litm_common::{Kind, NodeId, PacketMeta, Result, Transport};
 use rand::RngExt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::mpsc;
@@ -22,6 +23,7 @@ impl MockNetwork {
             id,
             drop_rate: self.drop_rate,
             network_handlers: self.handlers.clone(),
+            counter: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -30,6 +32,7 @@ pub struct MockTransport {
     pub id: u32,
     pub drop_rate: f64,
     pub network_handlers: Arc<Mutex<Vec<mpsc::Sender<(PacketMeta, Vec<u8>)>>>>,
+    pub counter: Arc<AtomicU64>,
 }
 
 impl Transport for MockTransport {
@@ -46,22 +49,25 @@ impl Transport for MockTransport {
             .iter()
             .cloned()
             .collect();
-
+        
+        let counter = self.counter.fetch_add(1, Ordering::Relaxed);
+        
         for handler in handlers {
             if rng.random_bool(self.drop_rate) {
                 continue; // Drop packet
             }
-
+            
             let meta = PacketMeta {
                 sender_id: self.id,
+                counter,
                 rssi_dbm: -50,
                 recv_time: Instant::now(),
             };
-
+            
             let payload_copy = payload.to_vec();
             let _ = handler.try_send((meta, payload_copy));
         }
-
+        
         Ok(())
     }
 
@@ -69,5 +75,9 @@ impl Transport for MockTransport {
         let (tx, rx) = mpsc::channel(100);
         self.network_handlers.lock().unwrap().push(tx);
         rx
+    }
+
+    fn set_channel(&self, _ch: u8) -> Result<()> {
+        Ok(())
     }
 }

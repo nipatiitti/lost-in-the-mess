@@ -1,10 +1,10 @@
 use clap::{Parser, Subcommand};
 use litm_common::{
-    DeliveredObject, Delivery, Kind, Mesh, NodeId, ObjectBitmap, PacketMeta, Result, SendPolicy,
+    Delivery, Kind, NodeId, PacketMeta, Result, SendPolicy,
     Transport,
 };
+use litm_delivery::RaptorQDelivery;
 use litm_mesh::MeshService;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -154,21 +154,7 @@ impl Transport for MockTransport {
     }
 }
 
-// Mock Delivery for Person C to test their mesh code
-struct MockDelivery;
-impl Delivery for MockDelivery {
-    fn send_object(&self, _id: u32, _payload: Vec<u8>, _policy: SendPolicy) -> Result<()> {
-        Ok(())
-    }
-    fn subscribe(&self) -> tokio::sync::mpsc::Receiver<DeliveredObject> {
-        let (_, rx) = tokio::sync::mpsc::channel(1);
-        rx
-    }
-    fn decoded_bitmap(&self) -> ObjectBitmap {
-        ObjectBitmap::default()
-    }
-    fn note_peer_coverage(&self, _peer: NodeId, _bitmap: ObjectBitmap) {}
-}
+
 
 #[derive(Parser)]
 struct Cli {
@@ -193,6 +179,12 @@ enum Commands {
         id: NodeId,
         #[arg(short, long)]
         path: String,
+    },
+    SendText {
+        #[arg(short, long)]
+        id: NodeId,
+        #[arg(short, long)]
+        message: String,
     },
 }
 
@@ -234,8 +226,8 @@ async fn main() {
                 .collect::<Vec<_>>();
 
             let transport = MockTransport::new(id, ignored_nodes).await;
-            let delivery = Arc::new(MockDelivery);
-            let _mesh = MeshService::new(Arc::clone(&transport) as Arc<dyn Transport>, delivery);
+            let delivery = RaptorQDelivery::new(Arc::clone(&transport));
+            let _mesh = MeshService::new(Arc::clone(&transport) as Arc<dyn Transport>, delivery.clone());
 
             // Command socket for send-image
             let listener = TcpListener::bind(format!("127.0.0.1:{}", 10000 + id)).await.unwrap();
@@ -244,11 +236,22 @@ async fn main() {
             while let Ok((mut stream, _)) = listener.accept().await {
                 let mut buf = [0; 1024];
                 if let Ok(n) = stream.read(&mut buf).await {
-                    let cmd = String::from_utf8_lossy(&buf[..n]);
-                    if cmd.starts_with("send-image") {
-                        info!("Node {} triggered send-image", id);
-                        // Trigger transport broadcast directly just to show it floods
-                        let _ = transport.broadcast(Kind::Fec, b"fake-image-payload");
+                    let cmd_str = String::from_utf8_lossy(&buf[..n]);
+                    if cmd_str.starts_with("send-image") {
+                        info!("Node {} triggering real RaptorQ send_object (fake image)", id);
+                        let _ = delivery.send_object(
+                            rand::random(),
+                            vec![0xAA; 5000], // 5KB fake image
+                            SendPolicy::default(),
+                        );
+                    } else if cmd_str.starts_with("send-text") {
+                        let text = cmd_str.strip_prefix("send-text ").unwrap_or("Hello Mesh!");
+                        info!("Node {} sending text: {}", id, text);
+                        let _ = delivery.send_object(
+                            rand::random(),
+                            text.as_bytes().to_vec(),
+                            SendPolicy::default(),
+                        );
                     }
                 }
             }
@@ -257,6 +260,14 @@ async fn main() {
             if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{}", 10000 + id)).await {
                 let _ = stream.write_all(format!("send-image {}", path).as_bytes()).await;
                 info!("Triggered send-image on node {}", id);
+            } else {
+                warn!("Failed to connect to node {}", id);
+            }
+        }
+        Commands::SendText { id, message } => {
+            if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{}", 10000 + id)).await {
+                let _ = stream.write_all(format!("send-text {}", message).as_bytes()).await;
+                info!("Triggered send-text on node {}", id);
             } else {
                 warn!("Failed to connect to node {}", id);
             }

@@ -1,6 +1,7 @@
 //! Shared contract between transport, delivery, mesh, and app.
 //! No business logic lives here — only the types and traits at the seams.
 
+use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
@@ -33,7 +34,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 // ---------- Packet kinds ----------
 // One byte inside the encrypted envelope. Transport adds/strips it transparently.
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum Kind {
     Beacon  = 0,   // mesh -> mesh
@@ -43,17 +44,18 @@ pub enum Kind {
 
 // ---------- Per-packet metadata ----------
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PacketMeta {
     pub sender_id: NodeId,
     pub counter:   u64,
     pub rssi_dbm:  i8,
+    #[serde(skip, default = "Instant::now")]
     pub recv_time: Instant,
 }
 
 // ---------- Object-id bitmap (piggybacked ACKs in beacons) ----------
 
-#[derive(Copy, Clone, Default, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ObjectBitmap(pub [u64; BITMAP_WORDS]);
 
 impl ObjectBitmap {
@@ -71,7 +73,7 @@ impl ObjectBitmap {
 
 // ---------- Send-side policy ----------
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SendPolicy {
     pub desired_coverage: u8,   // stop once this many peers' beacons confirm
     pub ttl:              Duration,
