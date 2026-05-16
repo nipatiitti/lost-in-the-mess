@@ -46,6 +46,7 @@ pub enum Kind {
 #[derive(Clone, Debug)]
 pub struct PacketMeta {
     pub sender_id: NodeId,
+    pub counter:   u64,
     pub rssi_dbm:  i8,
     pub recv_time: Instant,
 }
@@ -108,6 +109,7 @@ pub trait Transport: Send + Sync + 'static {
     fn local_id(&self) -> NodeId;
     fn broadcast(&self, kind: Kind, payload: &[u8]) -> Result<()>;
     fn subscribe(&self, kind: Kind) -> mpsc::Receiver<(PacketMeta, Vec<u8>)>;
+    fn set_channel(&self, ch: u8) -> Result<()>;
 }
 
 /// Person B (delivery crate) implements this.
