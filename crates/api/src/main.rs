@@ -50,6 +50,7 @@ struct GodData {
     messages: Vec<ApiMessage>,
     topology: std::collections::HashMap<NodeId, Vec<(NodeId, f32)>>,
     active_streams: Vec<NodeId>,
+    radio: app_sdk::RadioInfo,
 }
 
 #[derive(Deserialize)]
@@ -81,6 +82,7 @@ async fn get_data(State(state): State<AppState>) -> Json<GodData> {
         topology: state.node.topology(),
         messages: state.messages.lock().unwrap().clone(),
         active_streams,
+        radio: state.node.radio_info(),
     })
 }
 

@@ -8,6 +8,14 @@ use crate::error::{Result, SdkError};
 use crate::message::{MessagePayload, ReceivedMessage, decode_message, encode_message};
 use crate::policy;
 
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct RadioInfo {
+    pub channel: u32,
+    pub frequency_mhz: u32,
+    pub width_mhz: u32,
+    pub txpower_dbm: f32,
+}
+
 /// High-level handle for a mesh node. Clone is cheap — all fields are `Arc` or `Copy`.
 #[derive(Clone)]
 pub struct Node {
@@ -38,6 +46,15 @@ impl Node {
     /// Raw transport — use to create a `VideoChannel` for the unreliable video lane.
     pub fn transport(&self) -> Arc<dyn Transport> {
         Arc::clone(&self.transport)
+    }
+
+    pub fn radio_info(&self) -> RadioInfo {
+        RadioInfo {
+            channel: 6,
+            frequency_mhz: 2437,
+            width_mhz: 20,
+            txpower_dbm: 22.0,
+        }
     }
 
     // --- sending ---

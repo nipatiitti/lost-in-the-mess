@@ -9,5 +9,5 @@ mod broadcast;
 pub use builder::NodeBuilder;
 pub use error::{Result, SdkError};
 pub use message::{MessagePayload, ReceivedMessage, SDK_ENVELOPE_VERSION};
-pub use node::{MessageReceiver, Node};
+pub use node::{MessageReceiver, Node, RadioInfo};
 pub use video::{VideoChannel, VideoFrame, VideoQuality, VideoStreamer};

@@ -13,7 +13,8 @@
     local_id: 0,
     neighbors: [],
     messages: [],
-    topology: {}
+    topology: {},
+    radio: null
   };
 
   let connected = false;
@@ -244,6 +245,7 @@
     onSend={() => screen = "uplink"} 
     nodesCount={nodes.length} 
     {connected} 
+    radio={data.radio}
   />
   
   <div class="shell-main">
