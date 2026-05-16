@@ -12,7 +12,7 @@ use litm_common::{
     DeliveredObject, Delivery, Kind, NodeId, ObjectBitmap, ObjectId, Result, SendPolicy, Transport,
 };
 
-pub struct RaptorQDelivery<T: Transport> {
+pub struct RaptorQDelivery<T: Transport + ?Sized> {
     transport: Arc<T>,
     subscribers: Arc<Mutex<Vec<mpsc::Sender<DeliveredObject>>>>,
     decoders: Arc<Mutex<HashMap<ObjectId, Decoder>>>,
@@ -21,7 +21,7 @@ pub struct RaptorQDelivery<T: Transport> {
     local_bitmap: Arc<Mutex<ObjectBitmap>>,
 }
 
-impl<T: Transport + 'static> RaptorQDelivery<T> {
+impl<T: Transport + 'static + ?Sized> RaptorQDelivery<T> {
     pub fn new(transport: Arc<T>) -> Arc<Self> {
         let delivery = Arc::new(Self {
             transport: transport.clone(),
@@ -34,7 +34,7 @@ impl<T: Transport + 'static> RaptorQDelivery<T> {
 
         let mut rx = transport.subscribe(Kind::Fec);
         let delivery_clone = delivery.clone();
-        
+
         tokio::spawn(async move {
             while let Some((meta, payload)) = rx.recv().await {
                 delivery_clone.handle_packet(meta.sender_id, &payload).await;
@@ -68,7 +68,7 @@ impl<T: Transport + 'static> RaptorQDelivery<T> {
             if let Some(decoded_payload) = decoder.decode(packet) {
                 completed.push(frame.object_id);
                 self.local_bitmap.lock().unwrap().set(frame.object_id);
-                
+
                 let mut subscribers = self.subscribers.lock().unwrap();
                 subscribers.retain(|tx| {
                     tx.try_send(DeliveredObject {
@@ -83,7 +83,7 @@ impl<T: Transport + 'static> RaptorQDelivery<T> {
     }
 }
 
-impl<T: Transport + 'static> Delivery for RaptorQDelivery<T> {
+impl<T: Transport + 'static + ?Sized> Delivery for RaptorQDelivery<T> {
     fn send_object(&self, id: ObjectId, payload: Vec<u8>, policy: SendPolicy) -> Result<()> {
         let transport = self.transport.clone();
         let payload_len = payload.len() as u64;
@@ -92,7 +92,7 @@ impl<T: Transport + 'static> Delivery for RaptorQDelivery<T> {
         tokio::spawn(async move {
             let symbol_size = 1024;
             let encoder = Encoder::with_defaults(&payload, symbol_size);
-            
+
             let k = (payload_len as f64 / symbol_size as f64).ceil() as u32;
             let target_symbols = (((k + 4) as f64 * 1.2) / 0.8).ceil() as u32;
 
@@ -100,13 +100,13 @@ impl<T: Transport + 'static> Delivery for RaptorQDelivery<T> {
 
             let mut oti = [0u8; 12];
             oti[0..8].copy_from_slice(&payload_len.to_be_bytes());
-            
+
             for packet in packets {
                 let coverage_count = {
                     let coverage = peer_coverage.lock().unwrap();
                     coverage.values().filter(|b| b.contains(id)).count()
                 };
-                
+
                 if coverage_count >= policy.desired_coverage as usize {
                     break;
                 }
