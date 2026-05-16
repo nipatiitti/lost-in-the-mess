@@ -139,4 +139,5 @@ pub trait Delivery: Send + Sync + 'static {
 /// Neighbor discovery, link quality, and beacon-borne state distribution.
 pub trait Mesh: Send + Sync + 'static {
     fn neighbors(&self) -> Vec<NeighborInfo>;
+    fn topology(&self) -> std::collections::HashMap<NodeId, Vec<(NodeId, f32)>>;
 }

@@ -69,23 +69,6 @@ impl MeshService {
         service
     }
 
-    /// Returns the full link-state graph as known from received beacons.
-    /// `topology()[node_id]` = list of (neighbor_id, prr) that `node_id` reported hearing.
-    pub fn topology(&self) -> HashMap<NodeId, Vec<(NodeId, f32)>> {
-        self.link_state
-            .read()
-            .unwrap()
-            .iter()
-            .map(|(src, links)| {
-                let converted = links
-                    .iter()
-                    .map(|(dst, prr_byte)| (*dst, *prr_byte as f32 / 255.0))
-                    .collect();
-                (*src, converted)
-            })
-            .collect()
-    }
-
     fn spawn_beacon_sender(
         transport: Arc<dyn Transport>,
         delivery: Arc<dyn Delivery>,
@@ -320,6 +303,23 @@ impl Mesh for MeshService {
                 rssi_dbm: state.rssi_dbm,
                 last_seen: state.last_seen,
                 bitmap: state.bitmap,
+            })
+            .collect()
+    }
+
+    /// Returns the full link-state graph as known from received beacons.
+    /// `topology()[node_id]` = list of (neighbor_id, prr) that `node_id` reported hearing.
+    fn topology(&self) -> std::collections::HashMap<NodeId, Vec<(NodeId, f32)>> {
+        self.link_state
+            .read()
+            .unwrap()
+            .iter()
+            .map(|(src, links)| {
+                let converted = links
+                    .iter()
+                    .map(|(dst, prr_byte)| (*dst, *prr_byte as f32 / 255.0))
+                    .collect();
+                (*src, converted)
             })
             .collect()
     }

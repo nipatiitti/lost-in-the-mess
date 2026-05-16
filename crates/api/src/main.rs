@@ -44,6 +44,7 @@ struct GodData {
     local_id: NodeId,
     neighbors: Vec<NeighborInfo>,
     messages: Vec<ReceivedMessage>,
+    topology: std::collections::HashMap<NodeId, Vec<(NodeId, f32)>>,
 }
 
 #[derive(Deserialize)]
@@ -53,11 +54,13 @@ struct SendRequest {
 
 async fn get_data(State(state): State<AppState>) -> Json<GodData> {
     let neighbors = state.mesh.neighbors();
+    let topology = state.mesh.topology();
     let messages = state.messages.lock().unwrap().clone();
     Json(GodData {
         local_id: state.local_id,
         neighbors,
         messages,
+        topology,
     })
 }
 

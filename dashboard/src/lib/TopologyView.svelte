@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   export let nodes = [];
+  export let links = [];
   export let selected = null;
   export let setSelected = () => {};
 
@@ -11,8 +12,6 @@
   $: byId = Object.fromEntries(nodes.map(n => [n.id, n]));
   
   $: pos = (n) => ({ x: (n.x / 100) * svgWidth, y: (n.y / 100) * svgHeight });
-
-  $: links = nodes.filter(n => n.id !== "HUB").map(n => ["HUB", n.id, n.prr]);
 
   function colorForState(state) {
     if (state === "ok") return "var(--signal-300)";
@@ -80,15 +79,15 @@
     {/each}
 
     <!-- Links -->
-    {#each links as [a, b, q]}
-      {@const A = byId[a]}
-      {@const B = byId[b]}
+    {#each links as link}
+      {@const A = byId[link.source]}
+      {@const B = byId[link.target]}
       {#if A && B}
         {@const pa = pos(A)}
         {@const pb = pos(B)}
-        {@const color = colorForPrr(q)}
-        {@const isLost = q < 0.25}
-        {@const isRelay = q >= 0.25 && q < 0.75}
+        {@const color = colorForPrr(link.prr)}
+        {@const isLost = link.prr < 0.25}
+        {@const isRelay = link.prr >= 0.25 && link.prr < 0.75}
         <line x1={pa.x} y1={pa.y} x2={pb.x} y2={pb.y}
           stroke={color}
           stroke-opacity={isLost ? 0.55 : isRelay ? 0.65 : 0.8}

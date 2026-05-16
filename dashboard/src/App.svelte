@@ -10,7 +10,8 @@
   let data = {
     local_id: 0,
     neighbors: [],
-    messages: []
+    messages: [],
+    topology: {}
   };
 
   let connected = false;
@@ -59,34 +60,133 @@
 
   $: nodes = (() => {
     const hubId = "HUB";
-    const result = [{
+    const result = [];
+    const nodeMap = new Map();
+
+    const addNode = (id, obj) => {
+      if (!nodeMap.has(id)) {
+        nodeMap.set(id, obj);
+        result.push(obj);
+      }
+      return nodeMap.get(id);
+    };
+
+    addNode(data.local_id, {
       id: hubId,
-      label: `N-${data.local_id.toString().padStart(2, '0')}`,
+      label: `N-${(data.local_id || 0).toString().padStart(2, '0')}`,
       prr: 1.0,
       state: "ok",
       dbm: 0,
       hops: 0,
       x: 50,
       y: 50
-    }];
+    });
 
-    const N = data.neighbors.length;
-    data.neighbors.forEach((n, i) => {
-      const angle = (i / N) * 2 * Math.PI;
-      const radius = 30; // percentage
-      result.push({
-        id: `N-${n.id.toString().padStart(2, '0')}`,
-        label: `N-${n.id.toString().padStart(2, '0')}`,
-        prr: n.prr,
-        state: getPrrState(n.prr),
-        dbm: n.rssi_dbm,
-        hops: 1, // Default to 1 hop (direct); mesh topology routing not yet exported to UI
-        x: 50 + radius * Math.cos(angle),
-        y: 50 + radius * Math.sin(angle)
+    if (data.neighbors) {
+      data.neighbors.forEach(n => {
+        addNode(n.id, {
+          id: `N-${n.id.toString().padStart(2, '0')}`,
+          label: `N-${n.id.toString().padStart(2, '0')}`,
+          prr: n.prr,
+          state: getPrrState(n.prr),
+          dbm: n.rssi_dbm,
+          hops: 1
+        });
       });
+    }
+
+    if (data.topology) {
+      Object.entries(data.topology).forEach(([sourceStr, edges]) => {
+        const sourceId = parseInt(sourceStr, 10);
+        addNode(sourceId, {
+          id: `N-${sourceId.toString().padStart(2, '0')}`,
+          label: `N-${sourceId.toString().padStart(2, '0')}`,
+          prr: 0,
+          state: "lost",
+          dbm: -100,
+          hops: 2
+        });
+        
+        edges.forEach(([targetId, prr]) => {
+          addNode(targetId, {
+            id: `N-${targetId.toString().padStart(2, '0')}`,
+            label: `N-${targetId.toString().padStart(2, '0')}`,
+            prr: 0,
+            state: "lost",
+            dbm: -100,
+            hops: 2
+          });
+        });
+      });
+
+      // Simple BFS for hops
+      let bfsQueue = [data.local_id];
+      let visited = new Set([data.local_id]);
+      
+      while(bfsQueue.length > 0) {
+         let curr = bfsQueue.shift();
+         let currNode = nodeMap.get(curr);
+         let currHops = currNode ? currNode.hops : 0;
+         
+         let neighborsOfCurr = [];
+         if (curr === data.local_id) {
+            neighborsOfCurr = (data.neighbors || []).map(n => n.id);
+         } else if (data.topology[curr]) {
+            neighborsOfCurr = data.topology[curr].map(link => link[0]);
+         }
+         
+         for (let nId of neighborsOfCurr) {
+            if (!visited.has(nId) && nodeMap.has(nId)) {
+               visited.add(nId);
+               nodeMap.get(nId).hops = currHops + 1;
+               bfsQueue.push(nId);
+            }
+         }
+      }
+    }
+
+    // Layout
+    const hopsArr = [];
+    result.forEach(n => {
+       if (n.id === "HUB") return;
+       let h = n.hops;
+       if (!hopsArr[h]) hopsArr[h] = [];
+       hopsArr[h].push(n);
+    });
+
+    hopsArr.forEach((nodesAtHop, h) => {
+       if (!nodesAtHop) return;
+       const N = nodesAtHop.length;
+       const radius = Math.min(20 * h, 45); // cap radius
+       nodesAtHop.forEach((n, i) => {
+          const angle = (i / N) * 2 * Math.PI + (h * 0.5);
+          n.x = 50 + radius * Math.cos(angle);
+          n.y = 50 + radius * Math.sin(angle);
+       });
     });
 
     return result;
+  })();
+
+  $: meshLinks = (() => {
+    let l = [];
+    if (data.neighbors) {
+       data.neighbors.forEach(n => {
+          l.push({ source: "HUB", target: `N-${n.id.toString().padStart(2, '0')}`, prr: n.prr });
+       });
+    }
+    if (data.topology) {
+       Object.entries(data.topology).forEach(([sourceStr, edges]) => {
+          const sourceId = parseInt(sourceStr, 10);
+          const sId = sourceId === data.local_id ? "HUB" : `N-${sourceId.toString().padStart(2, '0')}`;
+          
+          edges.forEach(([targetId, prr]) => {
+             const tId = targetId === data.local_id ? "HUB" : `N-${targetId.toString().padStart(2, '0')}`;
+             l.push({ source: sId, target: tId, prr: prr });
+          });
+       });
+    }
+    return l;
   })();
 
   $: formattedMessages = data.messages.map((m, i) => {
@@ -137,7 +237,7 @@
   <div class="shell-main">
     <div style="flex:1;min-height:0;display:flex;position:relative;flex-direction:column">
         {#if screen === "topology"}
-          <TopologyView {nodes} selected={selectedNode} setSelected={(n) => selectedNode = n} />
+          <TopologyView {nodes} links={meshLinks} selected={selectedNode} setSelected={(n) => selectedNode = n} />
         {:else if screen === "nodes"}
           <NodeGrid {nodes} selected={selectedNode} setSelected={(n) => selectedNode = n} />
         {:else if screen === "uplink"}
