@@ -45,7 +45,7 @@ pub struct RaptorQDelivery<T: Transport + ?Sized> {
     subscribers: Arc<Mutex<Vec<mpsc::Sender<DeliveredObject>>>>,
     telemetry_subscribers: Arc<Mutex<Vec<mpsc::Sender<RaptorEvent>>>>,
     /// Value is (decoder, time of last packet received for this object, packets_received, k_symbols).
-    decoders: Arc<Mutex<HashMap<ObjectId, (Decoder, Instant, u32, u32)>>>,
+    decoders: Arc<Mutex<HashMap<ObjectId, (Arc<Mutex<Decoder>>, Instant, u32, u32)>>>,
     completed_objects: Arc<Mutex<CompletedSet>>,
     /// Exact object IDs confirmed decoded by each peer (from beacon recent lists).
     /// Used by send_object for accurate coverage counting — no bitmap hash collisions.
@@ -83,7 +83,10 @@ impl<T: Transport + 'static + ?Sized> RaptorQDelivery<T> {
         let delivery_clone = delivery.clone();
         tokio::spawn(async move {
             while let Some((meta, payload)) = rx.recv().await {
-                delivery_clone.handle_packet(meta.origin_id, &payload).await;
+                let task_delivery = delivery_clone.clone();
+                tokio::spawn(async move {
+                    task_delivery.handle_packet(meta.origin_id, payload).await;
+                });
             }
         });
 
@@ -101,8 +104,8 @@ impl<T: Transport + 'static + ?Sized> RaptorQDelivery<T> {
         delivery
     }
 
-    async fn handle_packet(&self, source: NodeId, payload: &[u8]) {
-        if let Some(frame) = FecFrame::decode(payload) {
+    async fn handle_packet(self: Arc<Self>, source: NodeId, payload: Vec<u8>) {
+        if let Some(frame) = FecFrame::decode(&payload) {
             {
                 let completed = self.completed_objects.lock().unwrap();
                 if completed.contains(frame.object_id) {
@@ -110,59 +113,90 @@ impl<T: Transport + 'static + ?Sized> RaptorQDelivery<T> {
                 }
             }
 
-            let mut decoders = self.decoders.lock().unwrap();
-            let mut emit_events = Vec::new();
+            let (decoder_arc, k, emit_events) = {
+                let mut decoders = self.decoders.lock().unwrap();
+                let mut emit_events = Vec::new();
 
-            let (decoder, last_seen, packets_received, k) = decoders.entry(frame.object_id).or_insert_with(|| {
-                let mut tl_bytes = [0u8; 8];
-                tl_bytes.copy_from_slice(&frame.oti[0..8]);
-                let transfer_length = u64::from_be_bytes(tl_bytes);
-                let k = (transfer_length as f64 / frame.sym_sz as f64).ceil() as u32;
-                (
-                    Decoder::new(ObjectTransmissionInformation::with_defaults(
-                        transfer_length,
-                        frame.sym_sz,
-                    )),
-                    Instant::now(),
-                    0,
-                    k,
-                )
+                let (decoder_arc, last_seen, packets_received, k) = decoders.entry(frame.object_id).or_insert_with(|| {
+                    let mut tl_bytes = [0u8; 8];
+                    tl_bytes.copy_from_slice(&frame.oti[0..8]);
+                    let transfer_length = u64::from_be_bytes(tl_bytes);
+                    let k = (transfer_length as f64 / frame.sym_sz as f64).ceil() as u32;
+                    (
+                        Arc::new(Mutex::new(Decoder::new(ObjectTransmissionInformation::with_defaults(
+                            transfer_length,
+                            frame.sym_sz,
+                        )))),
+                        Instant::now(),
+                        0,
+                        k,
+                    )
+                });
+                *last_seen = Instant::now();
+                *packets_received += 1;
+                
+                let is_repair = frame.esi >= *k;
+                emit_events.push(RaptorEvent::PacketReceived {
+                    id: frame.object_id,
+                    is_repair,
+                    source_block: frame.block as u32,
+                });
+                
+                let progress = (*packets_received as f32 / *k as f32).min(1.0);
+                let overhead = if *packets_received > *k { *packets_received - *k } else { 0 };
+                
+                emit_events.push(RaptorEvent::DecoderStatus {
+                    progress,
+                    overhead_symbols: overhead,
+                });
+                
+                // Faked matrix density for visualization purposes
+                emit_events.push(RaptorEvent::MatrixState {
+                    rows: *k as usize,
+                    cols: *k as usize,
+                    density: progress, // Simplification for visual density
+                });
+
+                (decoder_arc.clone(), *k, emit_events)
+            };
+
+            // Emit collected events immediately so the UI doesn't block
+            let mut telemetry = self.telemetry_subscribers.lock().unwrap();
+            telemetry.retain(|tx| {
+                let mut ok = true;
+                for event in &emit_events {
+                    if tx.try_send(event.clone()).is_err() {
+                        ok = false;
+                        break;
+                    }
+                }
+                ok
             });
-            *last_seen = Instant::now();
-            *packets_received += 1;
-            
-            let is_repair = frame.esi >= *k;
-            emit_events.push(RaptorEvent::PacketReceived {
-                id: frame.object_id,
-                is_repair,
-                source_block: frame.block as u32,
-            });
-            
-            let progress = (*packets_received as f32 / *k as f32).min(1.0);
-            let overhead = if *packets_received > *k { *packets_received - *k } else { 0 };
-            
-            emit_events.push(RaptorEvent::DecoderStatus {
-                progress,
-                overhead_symbols: overhead,
-            });
-            
-            // Faked matrix density for visualization purposes
-            emit_events.push(RaptorEvent::MatrixState {
-                rows: *k as usize,
-                cols: *k as usize,
-                density: progress, // Simplification for visual density
-            });
+            drop(telemetry);
 
             let payload_id = PayloadId::new(frame.block, frame.esi);
             let packet = EncodingPacket::new(payload_id, frame.payload);
 
-            if let Some(decoded_payload) = decoder.decode(packet) {
-                decoders.remove(&frame.object_id);
-                drop(decoders);
-                
-                emit_events.push(RaptorEvent::DecodingSuccess);
+            let decoded_payload = tokio::task::spawn_blocking(move || {
+                let mut decoder = decoder_arc.lock().unwrap();
+                decoder.decode(packet)
+            }).await.unwrap();
 
-                self.completed_objects.lock().unwrap().insert(frame.object_id);
+            if let Some(decoded_payload) = decoded_payload {
+                {
+                    let mut completed = self.completed_objects.lock().unwrap();
+                    if completed.contains(frame.object_id) {
+                        return; // Beaten by a concurrent decoder task
+                    }
+                    completed.insert(frame.object_id);
+                }
+
+                self.decoders.lock().unwrap().remove(&frame.object_id);
+                
+                let mut telemetry = self.telemetry_subscribers.lock().unwrap();
+                telemetry.retain(|tx| tx.try_send(RaptorEvent::DecodingSuccess).is_ok());
+                drop(telemetry);
+
                 self.local_bitmap.lock().unwrap().set(frame.object_id);
                 {
                     let mut recent = self.recent_completed.lock().unwrap();
@@ -183,22 +217,7 @@ impl<T: Transport + 'static + ?Sized> RaptorQDelivery<T> {
                     })
                     .is_ok()
                 });
-            } else {
-                drop(decoders);
             }
-            
-            // Emit collected events
-            let mut telemetry = self.telemetry_subscribers.lock().unwrap();
-            telemetry.retain(|tx| {
-                let mut ok = true;
-                for event in &emit_events {
-                    if tx.try_send(event.clone()).is_err() {
-                        ok = false;
-                        break;
-                    }
-                }
-                ok
-            });
         }
     }
 }
