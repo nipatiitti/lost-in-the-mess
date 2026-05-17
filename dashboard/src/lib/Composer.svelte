@@ -144,26 +144,21 @@
     canvasEl.height = captureH;
     ctx.drawImage(videoEl, 0, 0, CAPTURE_WIDTH, captureH);
 
-    // Get JPEG as data URI, then extract the base64 part
-    const dataUri = canvasEl.toDataURL("image/jpeg", 0.6);
-    const b64 = dataUri.split(",")[1];
-
-    try {
-      const res = await fetch("/api/video/frame", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          width: CAPTURE_WIDTH,
-          height: captureH,
-          data: b64,
-        }),
-      });
-      if (res.ok) {
-        frameCount++;
+    canvasEl.toBlob(async (blob) => {
+      if (!blob) return;
+      try {
+        const res = await fetch("/api/video/frame", {
+          method: "POST",
+          headers: { "Content-Type": "image/jpeg" },
+          body: blob,
+        });
+        if (res.ok) {
+          frameCount++;
+        }
+      } catch (e) {
+        console.error("Failed to send video frame:", e);
       }
-    } catch (e) {
-      console.error("Failed to send video frame:", e);
-    }
+    }, "image/jpeg", 0.6);
   }
 
   function colorForState(state) {
@@ -247,7 +242,7 @@
       target,
       kind,
       text,
-      image: kind === "image" ? imagePreview : null,
+      image: kind === "image" ? imageFile : null,
     });
 
     if (result?.id != null) {

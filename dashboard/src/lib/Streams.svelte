@@ -90,6 +90,33 @@
     const n = nodes.find(n => n.id === `N-${id.toString().padStart(2, '0')}`);
     return n ? n.label : `N-${id.toString().padStart(2, '0')}`;
   }
+
+  // Cache-busted URL per stream, updated on each poll tick
+  let frameUrls = {};
+
+  let pollInterval = null;
+
+  function tickFrames() {
+    const ts = Date.now();
+    const next = {};
+    for (const streamId of activeStreams) {
+      next[streamId] = `/api/video/latest/${streamId}?t=${ts}`;
+    }
+    frameUrls = next;
+  }
+
+  $: if (activeStreams.length > 0 && !pollInterval) {
+    pollInterval = setInterval(tickFrames, 100);
+    tickFrames();
+  } else if (activeStreams.length === 0 && pollInterval) {
+    clearInterval(pollInterval);
+    pollInterval = null;
+    frameUrls = {};
+  }
+
+  onDestroy(() => {
+    if (pollInterval) clearInterval(pollInterval);
+  });
 </script>
 
 <div style="padding:20px 24px;overflow:auto;flex:1;display:grid;grid-template-columns:1fr 360px;gap:20px">
@@ -125,19 +152,18 @@
               </span>
             </div>
             
-            <!-- MJPEG Stream -->
+            <!-- Polled JPEG frame -->
             <!-- svelte-ignore a11y-missing-attribute -->
-            <img 
-              src="/api/video/stream/{streamId}" 
-              style="width: 100%; display: block; object-fit: contain; background: #111;"
-              on:error={(e) => { e.target.style.display = 'none'; e.target.nextElementSibling.style.display = 'flex'; }}
-              on:load={(e) => { e.target.style.display = 'block'; e.target.nextElementSibling.style.display = 'none'; }}
-            />
-            
-            <!-- Fallback when loading/failed -->
-            <div style="display: none; position: absolute; inset: 0; align-items: center; justify-content: center; background: #111; color: var(--bone-400); font-family: var(--font-mono); font-size: 11px;">
-              CONNECTING...
-            </div>
+            {#if frameUrls[streamId]}
+              <img
+                src={frameUrls[streamId]}
+                style="width: 100%; display: block; object-fit: contain; background: #111;"
+              />
+            {:else}
+              <div style="height: 180px; display: flex; align-items: center; justify-content: center; background: #111; color: var(--bone-400); font-family: var(--font-mono); font-size: 11px;">
+                CONNECTING...
+              </div>
+            {/if}
           </div>
         {/each}
       </div>

@@ -205,28 +205,35 @@
     const d = new Date(m.timestamp * 1000);
     const nodeLabel = `N-${m.source.toString().padStart(2, '0')}`;
     const sourceNode = nodes.find(n => n.label === nodeLabel);
-    
+    const imageUrl = m.image_id != null ? `/api/image/${m.image_id}` : null;
+
     return {
       id: m.id || i,
       time: d.toISOString().split('T')[1].split('.')[0],
       node: nodeLabel,
       nodeState: sourceNode ? sourceNode.state : "ok",
-      kind: m.image ? "image" : "text",
-      payload: m.image ? "IMAGE ATTACHMENT" : (m.text !== null && m.text !== "" ? m.text : "EMPTY"),
-      image: m.image,
+      kind: imageUrl ? "image" : "text",
+      payload: imageUrl ? "IMAGE ATTACHMENT" : (m.text !== null && m.text !== "" ? m.text : "EMPTY"),
+      image: imageUrl,
       result: "RECV"
     };
   }).reverse();
 
 
   async function handleSend({ target, kind, text, image }) {
-    // Send to API
     try {
-      const res = await fetch('/api/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, image })
-      });
+      let res;
+      if (image instanceof File) {
+        const formData = new FormData();
+        if (text && text.trim()) formData.append('text', text);
+        formData.append('image', image);
+        res = await fetch('/api/send', { method: 'POST', body: formData });
+      } else {
+        res = await fetch('/api/send', {
+          method: 'POST',
+          body: (() => { const f = new FormData(); if (text && text.trim()) f.append('text', text); return f; })()
+        });
+      }
       if (res.ok) {
         const data = await res.json();
         lastResult = { result: "OK", message: `Packet committed → ${target}.` };
