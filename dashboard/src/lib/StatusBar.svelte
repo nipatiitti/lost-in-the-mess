@@ -1,5 +1,6 @@
 <script>
   import { RefreshCw, Send, Radio } from '@lucide/svelte';
+  import RaptorCanvas from '../RaptorCanvas.svelte';
   export let time = "00:00:00";
   export let lastEvent = "No recent events";
   export let onSend = () => {};
@@ -65,6 +66,10 @@
   {:else}
     <div style="flex:1"></div>
   {/if}
+  
+  <div style="flex-shrink: 0; padding: 0 16px;">
+    <RaptorCanvas width={120} height={24} />
+  </div>
 
   <!-- Right Area -->
   <div style="display:flex;align-items:center;gap:14px">
