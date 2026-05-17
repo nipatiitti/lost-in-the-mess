@@ -79,6 +79,7 @@
   $: targetNode = nodes.find((n) => n.id === target);
   $: expectedPrr = targetNode ? targetNode.prr : 1;
   $: willLikelyLand = expectedPrr >= 0.6;
+  $: chatEntries = entries.filter(e => !(e.kind === "text" && /^\[-?\d+(\.\d+)?,-?\d+(\.\d+)?\]/.test(e.payload)));
 
   // When kind changes away from video, stop camera
   $: if (kind !== "video") {
@@ -190,6 +191,35 @@
     if (prr >= 0.76) return "var(--signal-300)";
     if (prr >= 0.26) return "var(--uplink-300)";
     return "var(--lost-300)";
+  }
+
+  async function sendTextMsg() {
+    if (!text.trim()) return;
+    clearTimeout(sendStatusTimer);
+    currentSendId = null;
+    sendProgress = 0;
+    sendStatus = "transmitting";
+
+    const result = await onSend({
+      target,
+      kind: "text",
+      text,
+      image: null,
+    });
+
+    if (result?.id != null) {
+      currentSendId = result.id;
+    } else {
+      sendStatus = null;
+    }
+    text = "";
+  }
+
+  function handleKeydownVideo(e) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendTextMsg();
+    }
   }
 
   async function handleSend() {
@@ -393,6 +423,25 @@
             </div>
           {/if}
         </div>
+        <div style="margin-top: 12px;">
+          <input
+            type="text"
+            bind:value={text}
+            on:keydown={handleKeydownVideo}
+            placeholder="Type message while streaming..."
+            style="
+              width:100%;background:var(--ink-100);border:1px solid var(--border);
+              border-radius:2px;padding:10px 14px;color:var(--bone-100);
+              font-family:var(--font-mono);font-size:13px;outline:none;
+            "
+          />
+          <div
+            class="stamp"
+            style="font-size:9px;margin-top:6px;text-align:right;opacity:0.6"
+          >
+            PRESS ↵ TO TRANSMIT TEXT
+          </div>
+        </div>
       {/if}
     </div>
 
@@ -513,9 +562,9 @@
       class="panel bracketed"
       style="flex:1; display:flex; flex-direction:column; min-height:0; padding: 16px;"
     >
-      <div class="h-eyebrow" style="margin-bottom:12px">LIVE TRAFFIC</div>
+      <div class="h-eyebrow" style="margin-bottom:12px">MESH CHAT</div>
       <div style="flex:1; min-height:0; display:flex; flex-direction:column">
-        <PacketLog {entries} dense={true} />
+        <PacketLog entries={chatEntries} dense={true} />
       </div>
     </div>
   </div>
