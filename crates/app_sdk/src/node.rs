@@ -14,6 +14,9 @@ pub struct RadioInfo {
     pub frequency_mhz: u32,
     pub width_mhz: u32,
     pub txpower_dbm: f32,
+    pub pending_channel: Option<u8>,
+    pub pending_epoch: Option<u32>,
+    pub remaining_seconds: Option<u64>,
 }
 
 /// High-level handle for a mesh node. Clone is cheap — all fields are `Arc` or `Copy`.
@@ -50,11 +53,25 @@ impl Node {
 
     pub fn radio_info(&self) -> RadioInfo {
         let ch = self.mesh.current_channel();
+        let (pending_channel, pending_epoch, remaining_seconds) = if let Some((next_ch, at_epoch)) = self.mesh.pending_channel_switch() {
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let rem = (at_epoch as u64 * 60).saturating_sub(now_secs);
+            (Some(next_ch), Some(at_epoch), Some(rem))
+        } else {
+            (None, None, None)
+        };
+
         RadioInfo {
             channel: ch as u32,
             frequency_mhz: 2407 + (ch as u32) * 5,
             width_mhz: 20,
             txpower_dbm: 22.0,
+            pending_channel,
+            pending_epoch,
+            remaining_seconds,
         }
     }
 

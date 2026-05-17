@@ -177,4 +177,8 @@ pub trait Mesh: Send + Sync + 'static {
     fn request_channel_hop(&self, next_channel: u8) -> Result<()>;
     /// Current radio channel (updated after each coordinated hop applies).
     fn current_channel(&self) -> u8;
+    /// Get the pending channel switch target and scheduled epoch, if any.
+    fn pending_channel_switch(&self) -> Option<(u8, Epoch)> {
+        None
+    }
 }

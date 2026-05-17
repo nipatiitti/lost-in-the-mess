@@ -444,6 +444,10 @@ impl Mesh for MeshService {
     fn current_channel(&self) -> u8 {
         self.current_channel.load(Ordering::Relaxed)
     }
+
+    fn pending_channel_switch(&self) -> Option<(u8, Epoch)> {
+        *self.pending_channel_switch.read().unwrap()
+    }
 }
 
 /// Pure PRR calculation logic, extracted for unit testing.
