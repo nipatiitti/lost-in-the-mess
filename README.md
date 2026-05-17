@@ -280,9 +280,16 @@ A Svelte web dashboard consumes the API and shows:
 
 - Live interactive map with node positions and signal strength
 - Mesh topology graph with PRR-weighted edges
+  <img width="1532" height="954" alt="image" src="https://github.com/user-attachments/assets/3fa9ae22-e5b5-40ee-b92f-05bde13b1780" />
+
 - Real-time FEC decoding animation (matrix fill, overhead symbols)
+  <img width="1883" height="1058" alt="image" src="https://github.com/user-attachments/assets/1bf5569f-2b56-4564-9d3e-acdb651c995e" />
+
 - Live video streams from any node in the mesh
+  <img width="1853" height="955" alt="image" src="https://github.com/user-attachments/assets/f61d920c-bc00-4fb7-9c03-4b03baa470b3" />
+
 - Channel control panel
+<img width="732" height="330" alt="image" src="https://github.com/user-attachments/assets/4d9a4f97-34b4-4c7a-9c57-f5add8301e66" />
 
 ---
 
