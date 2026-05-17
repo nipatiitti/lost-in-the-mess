@@ -40,6 +40,7 @@
         t: Date.now(), 
         alpha: 1.0, 
         y: 0,
+        x: Math.random() * width,
         color: `hsl(${Math.random() * 360}, 100%, 60%)` 
       });
       if (packets.length > 50) packets.shift();
@@ -60,8 +61,8 @@
       ctx.fillStyle = p.color;
       ctx.globalAlpha = p.alpha;
       
-      // Packets drop randomly across the width
-      const px = ((p.id + p.source_block) * 13) % width;
+      // Packets drop vertically from their assigned random X
+      const px = p.x;
       
       if (p.y > height && p.alpha > 0) {
          p.alpha -= 0.15; 
