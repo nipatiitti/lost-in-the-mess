@@ -42,45 +42,56 @@
     };
   }
 
-  // Reactively parse messages — only OTHER nodes' markers via toggle,
+  // Reactively parse messages — only OTHER nodes' markers (explicit place/remove),
   // own markers come from local ownMarkerMap (instant, no roundtrip)
   $: myLabel = `N-${localId.toString().padStart(2, '0')}`;
 
   $: {
     const newPositions = {};
-    const otherMarkerMap = new Map(); // key = text, toggle on/off
+    // key = "node|name", last-writer-wins (no toggle)
+    const otherMarkerMap = new Map();
     
-    const chronological = [...messages].reverse();
-    
-    for (const msg of chronological) {
+    // messages are newest-first; iterate that way so first-seen = newest wins
+    for (const msg of messages) {
       const parsed = parseMapMessage(msg.payload);
       if (!parsed) continue;
       
       // Only process markers from OTHER nodes
       if (parsed.text && msg.node !== myLabel) {
-        if (otherMarkerMap.has(parsed.text)) {
-          otherMarkerMap.delete(parsed.text);
-        } else {
-          otherMarkerMap.set(parsed.text, {
-            x: parsed.x,
-            y: parsed.y,
-            text: parsed.text,
-            node: msg.node,
-            time: msg.time
-          });
+        const isRemoval = parsed.text.startsWith('-');
+        const markerName = isRemoval ? parsed.text.slice(1) : parsed.text;
+        const key = `${msg.node}|${markerName}`;
+        
+        // Last-writer-wins: skip if we already saw a newer message for this key
+        if (!otherMarkerMap.has(key)) {
+          if (isRemoval) {
+            // Mark as removed (null) so earlier place messages don't resurrect it
+            otherMarkerMap.set(key, null);
+          } else {
+            otherMarkerMap.set(key, {
+              x: parsed.x,
+              y: parsed.y,
+              text: markerName,
+              node: msg.node,
+              time: msg.time
+            });
+          }
         }
       }
-      // Always update position (latest wins)
-      newPositions[msg.node] = {
-        x: parsed.x,
-        y: parsed.y,
-        timestamp: msg.time
-      };
+      // Update position (newest-first, so first seen = latest)
+      if (!newPositions[msg.node]) {
+        newPositions[msg.node] = {
+          x: parsed.x,
+          y: parsed.y,
+          timestamp: msg.time
+        };
+      }
     }
     
     nodePositions = newPositions;
-    // Merge: other nodes' markers + our own local markers
-    markers = [...otherMarkerMap.values(), ...ownMarkerMap.values()];
+    // Merge: other nodes' active markers + our own local markers
+    const otherActive = [...otherMarkerMap.values()].filter(v => v !== null);
+    markers = [...otherActive, ...ownMarkerMap.values()];
   }
 
   // Convert logical coords to SVG pixels
@@ -128,11 +139,11 @@
     broadcastMarker(name);
   }
 
-  // Remove own marker (instant local + broadcast toggle-off)
+  // Remove own marker (instant local + broadcast explicit removal)
   function removeMarker(name) {
     ownMarkerMap.delete(name);
     ownMarkerMap = ownMarkerMap; // trigger Svelte reactivity
-    broadcastMarker(name);
+    broadcastMarker('-' + name); // '-' prefix = remove
   }
 
   function broadcastPosition() {
