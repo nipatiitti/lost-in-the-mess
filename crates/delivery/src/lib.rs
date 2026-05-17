@@ -234,7 +234,15 @@ impl<T: Transport + 'static + ?Sized> Delivery for RaptorQDelivery<T> {
                 };
 
                 let encoded_frame = frame.encode();
-                let _ = transport.broadcast(Kind::Fec, &encoded_frame);
+                loop {
+                    match transport.broadcast(Kind::Fec, &encoded_frame) {
+                        Ok(()) => break,
+                        Err(litm_common::Error::Backpressure) => {
+                            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                        }
+                        Err(_) => break,
+                    }
+                }
             }
         });
 
