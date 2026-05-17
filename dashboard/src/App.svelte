@@ -263,7 +263,7 @@
         {:else if screen === "uplink"}
           <Composer {nodes} onSend={handleSend} {lastResult} entries={formattedMessages} />
         {:else if screen === "streams"}
-          <Streams activeStreams={data.active_streams || []} {nodes} />
+          <Streams activeStreams={data.active_streams || []} {nodes} onSend={handleSend} {lastResult} entries={formattedMessages} />
         {:else if screen === "map"}
           <MapView messages={formattedMessages} localId={data.local_id} onSend={handleSend} {connected} />
         {:else if screen === "log"}
