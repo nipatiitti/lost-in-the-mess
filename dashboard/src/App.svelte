@@ -218,9 +218,6 @@
     };
   }).reverse();
 
-  $: lastEvent = formattedMessages.length > 0 
-    ? `${formattedMessages[0].node} · ${formattedMessages[0].kind} · ${formattedMessages[0].result}` 
-    : "No recent events";
 
   async function handleSend({ target, kind, text, image }) {
     // Send to API
@@ -247,7 +244,6 @@
   
   <StatusBar 
     time={timeStr} 
-    {lastEvent} 
     onSend={() => screen = "uplink"} 
     nodesCount={nodes.length} 
     {connected} 

@@ -2,7 +2,6 @@
   import { RefreshCw, Send, Radio } from '@lucide/svelte';
   import RaptorCanvas from '../RaptorCanvas.svelte';
   export let time = "00:00:00";
-  export let lastEvent = "No recent events";
   export let onSend = () => {};
   export let nodesCount = 0;
   export let connected = true;
@@ -58,14 +57,7 @@
   </div>
 
   <!-- Middle Area (Event log or layout spacer) -->
-  {#if connected}
-    <div style="flex:1;display:flex;align-items:center;gap:10px;min-width:0;overflow:hidden;white-space:nowrap">
-      <div class="stamp" style="font-size:10px;color:var(--bone-400);flex-shrink:0">LAST EVENT</div>
-      <div style="font-family:var(--font-mono);font-size:11px;color:var(--bone-200);overflow:hidden;text-overflow:ellipsis">{lastEvent}</div>
-    </div>
-  {:else}
-    <div style="flex:1"></div>
-  {/if}
+  <div style="flex:1"></div>
   
   <div style="flex-shrink: 0; padding: 0 16px;">
     <RaptorCanvas width={120} height={24} />
