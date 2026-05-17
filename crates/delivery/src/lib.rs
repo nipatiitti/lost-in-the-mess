@@ -161,8 +161,7 @@ impl<T: Transport + 'static + ?Sized> RaptorQDelivery<T> {
             };
 
             // Emit collected events immediately so the UI doesn't block
-            let mut telemetry = self.telemetry_subscribers.lock().unwrap();
-            telemetry.retain(|tx| {
+            self.telemetry_subscribers.lock().unwrap().retain(|tx| {
                 let mut ok = true;
                 for event in &emit_events {
                     if tx.try_send(event.clone()).is_err() {
@@ -172,7 +171,6 @@ impl<T: Transport + 'static + ?Sized> RaptorQDelivery<T> {
                 }
                 ok
             });
-            drop(telemetry);
 
             let payload_id = PayloadId::new(frame.block, frame.esi);
             let packet = EncodingPacket::new(payload_id, frame.payload);
@@ -193,9 +191,7 @@ impl<T: Transport + 'static + ?Sized> RaptorQDelivery<T> {
 
                 self.decoders.lock().unwrap().remove(&frame.object_id);
                 
-                let mut telemetry = self.telemetry_subscribers.lock().unwrap();
-                telemetry.retain(|tx| tx.try_send(RaptorEvent::DecodingSuccess).is_ok());
-                drop(telemetry);
+                self.telemetry_subscribers.lock().unwrap().retain(|tx| tx.try_send(RaptorEvent::DecodingSuccess).is_ok());
 
                 self.local_bitmap.lock().unwrap().set(frame.object_id);
                 {
@@ -208,8 +204,7 @@ impl<T: Transport + 'static + ?Sized> RaptorQDelivery<T> {
                     }
                 }
 
-                let mut subscribers = self.subscribers.lock().unwrap();
-                subscribers.retain(|tx| {
+                self.subscribers.lock().unwrap().retain(|tx| {
                     tx.try_send(DeliveredObject {
                         id: frame.object_id,
                         source,
