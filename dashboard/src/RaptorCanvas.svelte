@@ -40,7 +40,7 @@
         t: Date.now(), 
         alpha: 1.0, 
         y: 0,
-        x: Math.random() * width,
+        x: 2 + Math.random() * (width - 4),
         color: `hsl(${Math.floor(Math.random() * 360)}, 100%, 60%)` 
       });
       if (packets.length > 50) packets.shift();
