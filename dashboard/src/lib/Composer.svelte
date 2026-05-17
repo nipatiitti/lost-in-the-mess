@@ -1,5 +1,5 @@
 <script>
-  import { onDestroy } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import {
     MessageSquare,
     Image as ImageIcon,
@@ -17,6 +17,42 @@
   let text = "";
   let imageFile = null;
   let imagePreview = null;
+
+  // Send progress state
+  let ws = null;
+  let currentSendId = null;
+  let sendProgress = 0;   // 0.0–1.0
+  let sendStatus = null;  // null | 'transmitting' | 'done' | 'failed'
+  let sendStatusTimer = null;
+
+  onMount(() => {
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    ws = new WebSocket(`${proto}://${location.host}/api/raptor/ws`);
+    ws.onmessage = (e) => {
+      let ev;
+      try { ev = JSON.parse(e.data); } catch { return; }
+      if (currentSendId === null) return;
+      if (ev.type === "SenderProgress" && ev.data.id === currentSendId) {
+        sendProgress = ev.data.packets_sent / ev.data.target;
+      } else if (ev.type === "SenderComplete" && ev.data.id === currentSendId) {
+        sendProgress = 1;
+        sendStatus = "done";
+        scheduleReset(3000);
+      } else if (ev.type === "SenderFailed" && ev.data.id === currentSendId) {
+        sendStatus = "failed";
+        scheduleReset(4000);
+      }
+    };
+  });
+
+  function scheduleReset(ms) {
+    clearTimeout(sendStatusTimer);
+    sendStatusTimer = setTimeout(() => {
+      currentSendId = null;
+      sendProgress = 0;
+      sendStatus = null;
+    }, ms);
+  }
 
   // Video streaming state
   let videoStream = null;
@@ -156,7 +192,7 @@
     return "var(--lost-300)";
   }
 
-  function handleSend() {
+  async function handleSend() {
     if (kind === "video") {
       if (streaming) {
         stopStreaming();
@@ -171,12 +207,25 @@
       }
       return;
     }
-    onSend({
+
+    clearTimeout(sendStatusTimer);
+    currentSendId = null;
+    sendProgress = 0;
+    sendStatus = "transmitting";
+
+    const result = await onSend({
       target,
       kind,
       text,
       image: kind === "image" ? imagePreview : null,
     });
+
+    if (result?.id != null) {
+      currentSendId = result.id;
+    } else {
+      sendStatus = null;
+    }
+
     text = "";
     imageFile = null;
     imagePreview = null;
@@ -192,6 +241,8 @@
   onDestroy(() => {
     stopStreaming();
     stopCamera();
+    ws?.close();
+    clearTimeout(sendStatusTimer);
   });
 </script>
 
@@ -373,6 +424,27 @@
         </div>
       {/if}
     </div>
+
+    {#if sendStatus}
+      <div style="margin-top:12px">
+        <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+          <span class="stamp" style="font-size:9px">
+            {sendStatus === "transmitting" ? "TRANSMITTING" : sendStatus === "done" ? "DELIVERED" : "DONE"}
+          </span>
+          <span class="stamp" style="font-size:9px">
+            {sendStatus === "transmitting" ? Math.round(sendProgress * 100) + "%" : ""}
+          </span>
+        </div>
+        <div style="height:3px;background:var(--border);border-radius:1px;overflow:hidden">
+          <div style="
+            height:100%;
+            width:{sendStatus === 'done' ? 100 : Math.round(sendProgress * 100)}%;
+            background:{sendStatus === 'failed' ? 'var(--lost-300)' : 'var(--signal-300)'};
+            transition:width 0.3s ease;
+          "></div>
+        </div>
+      </div>
+    {/if}
   </div>
 
   <!-- Side: route preview -->

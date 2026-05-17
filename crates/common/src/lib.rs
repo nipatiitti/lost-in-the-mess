@@ -126,6 +126,9 @@ pub enum RaptorEvent {
     MatrixState { rows: usize, cols: usize, density: f32 },
     DecodingSuccess,
     DecodingFailed,
+    SenderProgress { id: ObjectId, packets_sent: u32, target: u32 },
+    SenderComplete { id: ObjectId },
+    SenderFailed { id: ObjectId },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

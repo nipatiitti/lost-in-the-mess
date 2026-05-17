@@ -223,8 +223,14 @@ impl<T: Transport + 'static + ?Sized> Delivery for RaptorQDelivery<T> {
         let payload_len = payload.len() as u64;
         let peer_exact = self.peer_exact.clone();
         let peer_prr = self.peer_prr.clone();
+        let telemetry = self.telemetry_subscribers.clone();
 
         tokio::spawn(async move {
+            let emit = |ev: RaptorEvent| {
+                let mut subs = telemetry.lock().unwrap();
+                subs.retain(|tx| tx.try_send(ev.clone()).is_ok());
+            };
+
             let symbol_size = 1374;
             let encoder = Encoder::with_defaults(&payload, symbol_size);
 
@@ -244,8 +250,11 @@ impl<T: Transport + 'static + ?Sized> Delivery for RaptorQDelivery<T> {
             let mut oti = [0u8; 12];
             oti[0..8].copy_from_slice(&payload_len.to_be_bytes());
 
+            let progress_every = (target_symbols / 20).max(1);
+
             // Honour the send policy TTL: abort if we cannot achieve coverage in time.
-            let _ = tokio::time::timeout(policy.ttl, async {
+            // Returns true if coverage was confirmed, false if packets exhausted without coverage.
+            let coverage_done = tokio::time::timeout(policy.ttl, async {
                 let mut sent = 0u32;
                 for packet in packets {
                     // Only check coverage after sending at least k source symbols —
@@ -257,7 +266,8 @@ impl<T: Transport + 'static + ?Sized> Delivery for RaptorQDelivery<T> {
                         };
 
                         if coverage_count >= policy.desired_coverage as usize {
-                            break;
+                            emit(RaptorEvent::SenderProgress { id, packets_sent: sent, target: target_symbols });
+                            return true;
                         }
                     }
 
@@ -283,9 +293,19 @@ impl<T: Transport + 'static + ?Sized> Delivery for RaptorQDelivery<T> {
                         }
                     }
                     sent += 1;
+                    if sent % progress_every == 0 || sent == k {
+                        emit(RaptorEvent::SenderProgress { id, packets_sent: sent, target: target_symbols });
+                    }
                 }
+                false
             })
             .await;
+
+            match coverage_done {
+                Ok(true)  => emit(RaptorEvent::SenderComplete { id }),
+                Ok(false) => emit(RaptorEvent::SenderFailed { id }),
+                Err(_)    => emit(RaptorEvent::SenderFailed { id }),
+            }
         });
 
         Ok(())

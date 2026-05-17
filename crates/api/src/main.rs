@@ -103,33 +103,42 @@ async fn send_message(
     Json(req): Json<SendRequest>,
 ) -> Json<serde_json::Value> {
     let mut sent = false;
+    let mut sent_id: Option<u32> = None;
 
     if let Some(text) = req.text {
         if !text.trim().is_empty() {
             info!("Sending text message");
-            if let Err(e) = state.node.send(MessagePayload::Text { content: text }) {
-                tracing::error!("Failed to send text: {}", e);
-                return Json(serde_json::json!({ "status": "error", "message": e.to_string() }));
+            match state.node.send(MessagePayload::Text { content: text }) {
+                Ok(id) => { sent_id = Some(id); sent = true; }
+                Err(e) => {
+                    tracing::error!("Failed to send text: {}", e);
+                    return Json(serde_json::json!({ "status": "error", "message": e.to_string() }));
+                }
             }
-            sent = true;
         }
     }
 
     if let Some(image_uri) = req.image {
         info!("Sending image ({} bytes)", image_uri.len());
         if let Some((mime, data)) = parse_data_uri(&image_uri) {
-            if let Err(e) = state.node.send(MessagePayload::Image { mime, bytes: data }) {
-                tracing::error!("Failed to send image: {}", e);
-                return Json(serde_json::json!({ "status": "error", "message": e.to_string() }));
+            match state.node.send(MessagePayload::Image { mime, bytes: data }) {
+                Ok(id) => { sent_id = Some(id); sent = true; }
+                Err(e) => {
+                    tracing::error!("Failed to send image: {}", e);
+                    return Json(serde_json::json!({ "status": "error", "message": e.to_string() }));
+                }
             }
-            sent = true;
         } else {
             tracing::warn!("Failed to parse image data URI");
         }
     }
 
     if sent {
-        Json(serde_json::json!({ "status": "ok" }))
+        let mut resp = serde_json::json!({ "status": "ok" });
+        if let Some(id) = sent_id {
+            resp["id"] = serde_json::json!(id);
+        }
+        Json(resp)
     } else {
         Json(serde_json::json!({ "status": "error", "message": "Nothing to send" }))
     }

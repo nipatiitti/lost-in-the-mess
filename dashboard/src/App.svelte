@@ -228,7 +228,10 @@
         body: JSON.stringify({ text, image })
       });
       if (res.ok) {
+        const data = await res.json();
         lastResult = { result: "OK", message: `Packet committed → ${target}.` };
+        setTimeout(() => lastResult = null, 4000);
+        return { id: data.id ?? null };
       } else {
         lastResult = { result: "LOST", message: `Packet lost on ${target}. Retry in 200ms.` };
       }
@@ -236,6 +239,7 @@
       lastResult = { result: "LOST", message: `Network error. Failed to send.` };
     }
     setTimeout(() => lastResult = null, 4000);
+    return null;
   }
 </script>
 
