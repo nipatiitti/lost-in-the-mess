@@ -97,8 +97,11 @@
   <!-- Middle Area (Event log or layout spacer) -->
   <div style="flex:1"></div>
   
-  <div style="flex-shrink: 0; padding: 0 16px;">
-    <RaptorCanvas width={120} height={24} />
+  <div style="flex-shrink: 0; padding: 0 16px; display: flex; align-items: center; gap: 10px;">
+    <div class="stamp" style="font-size:10px;color:var(--bone-400)">INCOMING DATA</div>
+    <div style="border: 1px solid var(--border); background: rgba(255, 255, 255, 0.05); border-radius: 4px; overflow: hidden; display: flex;">
+      <RaptorCanvas width={120} height={24} />
+    </div>
   </div>
 
   <!-- Right Area -->
