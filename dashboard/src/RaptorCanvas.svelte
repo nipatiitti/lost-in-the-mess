@@ -35,12 +35,14 @@
   
   function handleEvent(data) {
     if (data.type === "PacketReceived") {
-      packets.push({ ...data.data, t: Date.now(), alpha: 1.0, y: -5 });
+      packets.push({ 
+        ...data.data, 
+        t: Date.now(), 
+        alpha: 1.0, 
+        y: 0,
+        color: `hsl(${Math.random() * 360}, 100%, 60%)` 
+      });
       if (packets.length > 50) packets.shift();
-    } else if (data.type === "DecoderStatus") {
-      progress = data.data.progress;
-    } else if (data.type === "DecodingSuccess" || data.type === "DecodingFailed") {
-      progress = data.type === "DecodingSuccess" ? 1.0 : 0.0;
     }
   }
 
@@ -50,28 +52,18 @@
     // Clear background
     ctx.clearRect(0, 0, width, height);
     
-    // Draw matrix representation at the bottom
-    const mHeight = 3;
-    ctx.fillStyle = '#333';
-    ctx.fillRect(0, height - mHeight, width, mHeight);
-    
-    if (progress > 0) {
-      ctx.fillStyle = `rgba(0, 255, 65, 0.8)`;
-      ctx.fillRect(0, height - mHeight, width * progress, mHeight);
-    }
-    
     // Draw packets falling
     for (let i = 0; i < packets.length; i++) {
       let p = packets[i];
       p.y += 1.5;
       
-      ctx.fillStyle = p.is_repair ? '#ffaa00' : '#00ff41';
+      ctx.fillStyle = p.color;
       ctx.globalAlpha = p.alpha;
       
       // Packets drop randomly across the width
       const px = ((p.id + p.source_block) * 13) % width;
       
-      if (p.y > height - mHeight && p.alpha > 0) {
+      if (p.y > height && p.alpha > 0) {
          p.alpha -= 0.15; 
       }
       
