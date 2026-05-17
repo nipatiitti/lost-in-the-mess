@@ -150,6 +150,10 @@ pub trait Transport: Send + Sync + 'static {
     fn broadcast_forwarded(&self, kind: Kind, payload: &[u8], origin: NodeId) -> Result<()>;
     fn subscribe(&self, kind: Kind) -> mpsc::Receiver<(PacketMeta, Vec<u8>)>;
     fn set_channel(&self, ch: u8) -> Result<()>;
+    /// Read the currently configured channel of the physical radio (defaults to 6).
+    fn get_channel(&self) -> u8 {
+        6
+    }
 }
 
 /// Person B (delivery crate) implements this.

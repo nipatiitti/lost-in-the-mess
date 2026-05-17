@@ -154,6 +154,41 @@ impl Radio {
         }
         Ok(())
     }
+
+    pub fn get_channel(&self) -> u8 {
+        match Command::new("iw")
+            .arg("dev")
+            .arg(&self.cfg.iface)
+            .arg("info")
+            .output()
+        {
+            Ok(out) if out.status.success() => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                for line in stdout.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with("channel ") {
+                        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                        if parts.len() >= 2 {
+                            if let Ok(ch) = parts[1].parse::<u8>() {
+                                return ch;
+                            }
+                        }
+                    }
+                }
+                warn!(iface = %self.cfg.iface, "channel info line not found in iw output, falling back to channel 6");
+                6
+            }
+            Ok(out) => {
+                let err = String::from_utf8_lossy(&out.stderr);
+                warn!(iface = %self.cfg.iface, error = %err, "iw dev info failed, falling back to channel 6");
+                6
+            }
+            Err(e) => {
+                warn!(iface = %self.cfg.iface, error = ?e, "failed to spawn iw, falling back to channel 6");
+                6
+            }
+        }
+    }
 }
 
 impl Drop for Radio {

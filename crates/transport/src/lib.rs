@@ -344,6 +344,10 @@ impl Transport for WifiTransport {
     fn set_channel(&self, ch: u8) -> Result<()> {
         self.radio.set_channel(ch)
     }
+
+    fn get_channel(&self) -> u8 {
+        self.radio.get_channel()
+    }
 }
 
 fn current_epoch() -> Epoch {

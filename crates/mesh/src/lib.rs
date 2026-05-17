@@ -51,7 +51,7 @@ impl MeshService {
         let neighbor_table = Arc::new(RwLock::new(HashMap::new()));
         let link_state = Arc::new(RwLock::new(HashMap::new()));
         let pending_channel_switch = Arc::new(RwLock::new(None));
-        let current_channel = Arc::new(AtomicU8::new(6));
+        let current_channel = Arc::new(AtomicU8::new(transport.get_channel()));
 
         let service = Arc::new(Self {
             transport: Arc::clone(&transport),
