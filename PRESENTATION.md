@@ -364,17 +364,16 @@ mindmap
 
 ## Extension Roadmap
 
-| Item                                         | Effort           | Notes                                                              |
-| -------------------------------------------- | ---------------- | ------------------------------------------------------------------ |
-| Noise IK pairwise join handshake             | ~1 day           | Architecture already designed; `snow` crate wired in               |
-| Full HKDF ratchet without root key in memory | ~half day        | Replace root-key derivation with pure chain                        |
-| Distributed target tracking                  | ~1 day           | `Custom` message type, Kalman filter, topology API                 |
-| Progressive ISR image relay                  | ~hours           | Multi-path FEC already works; add resolution ladder                |
-| Swarm leader election                        | ~hours           | Beacon priority field + epoch-sync voting                          |
-| Spectrum-aware jamming reroute               | ~hours           | PRR collapse → `request_channel_hop` auto-trigger                  |
-| GPS / IMU telemetry fusion                   | ~1 day           | `Custom` message type, sensor-data schema                          |
-| kHz-rate FHSS                                | hardware-limited | RTL8812AU channel latency is 5–15 ms; not feasible on this chipset |
-| Full MLS group encryption                    | ~week            | Correct long-term answer; too heavy for a weekend                  |
+| Item                             | Effort           | Notes                                                              |
+| -------------------------------- | ---------------- | ------------------------------------------------------------------ |
+| Noise IK pairwise join handshake | ~1 day           | Architecture already designed; `snow` crate wired in               |
+| Distributed target tracking      | ~1 day           | `Custom` message type, Kalman filter, topology API                 |
+| Progressive ISR image relay      | ~hours           | Multi-path FEC already works; add resolution ladder                |
+| Swarm leader election            | ~hours           | Beacon priority field + epoch-sync voting                          |
+| Spectrum-aware jamming reroute   | ~hours           | PRR collapse → `request_channel_hop` auto-trigger                  |
+| GPS / IMU telemetry fusion       | ~1 day           | `Custom` message type, sensor-data schema                          |
+| kHz-rate FHSS                    | hardware-limited | RTL8812AU channel latency is 5–15 ms; not feasible on this chipset |
+| Full MLS group encryption        | ~2 days          | Correct long-term answer; too heavy for a weekend                  |
 
 ---
 
