@@ -18,13 +18,15 @@
   let wanderTimer = null;
 
   // Our position (start roughly center with some randomness)
-  let myX = 50 + (Math.random() - 0.5) * 20;
-  let myY = 50 + (Math.random() - 0.5) * 20;
+  let myX = Math.round((50 + (Math.random() - 0.5) * 20) * 10) / 10;
+  let myY = Math.round((50 + (Math.random() - 0.5) * 20) * 10) / 10;
 
   // Tracked node positions: Map<nodeLabel, {x, y, timestamp}>
   let nodePositions = {};
-  // Placed markers: [{x, y, text, node, timestamp}]
+  // All markers (own local + other nodes from messages)
   let markers = [];
+  // Own markers tracked locally for instant UI (no roundtrip needed)
+  let ownMarkerMap = new Map(); // name -> {x, y, text, node, time}
 
   // Parse messages for [x,y] or [x,y]=text format
   const MAP_REGEX = /^\[(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\](?:=(.+))?$/;
@@ -40,25 +42,26 @@
     };
   }
 
-  // Reactively parse all messages for map data
-  // Markers toggle: same =name sent again removes the previous one
+  // Reactively parse messages — only OTHER nodes' markers via toggle,
+  // own markers come from local ownMarkerMap (instant, no roundtrip)
+  $: myLabel = `N-${localId.toString().padStart(2, '0')}`;
+
   $: {
     const newPositions = {};
-    const markerMap = new Map(); // key = text, toggle on/off
+    const otherMarkerMap = new Map(); // key = text, toggle on/off
     
-    // Process messages oldest-first (messages come in reversed)
     const chronological = [...messages].reverse();
     
     for (const msg of chronological) {
       const parsed = parseMapMessage(msg.payload);
       if (!parsed) continue;
       
-      if (parsed.text) {
-        // Toggle: if marker with same name exists, remove it; otherwise place it
-        if (markerMap.has(parsed.text)) {
-          markerMap.delete(parsed.text);
+      // Only process markers from OTHER nodes
+      if (parsed.text && msg.node !== myLabel) {
+        if (otherMarkerMap.has(parsed.text)) {
+          otherMarkerMap.delete(parsed.text);
         } else {
-          markerMap.set(parsed.text, {
+          otherMarkerMap.set(parsed.text, {
             x: parsed.x,
             y: parsed.y,
             text: parsed.text,
@@ -76,7 +79,8 @@
     }
     
     nodePositions = newPositions;
-    markers = [...markerMap.values()];
+    // Merge: other nodes' markers + our own local markers
+    markers = [...otherMarkerMap.values(), ...ownMarkerMap.values()];
   }
 
   // Convert logical coords to SVG pixels
@@ -88,14 +92,14 @@
     };
   }
 
-  // POI names for random marker drops
+  // POI names for marker drops
   const POI_NAMES = [
     'ALPHA', 'BRAVO', 'CHARLIE', 'DELTA', 'ECHO',
     'FOXTROT', 'GOLF', 'HOTEL', 'INDIA', 'JULIET',
     'KILO', 'LIMA', 'MIKE', 'NOVEMBER', 'OSCAR',
     'RALLY', 'OVERWATCH', 'EXFIL', 'LZ', 'CP'
   ];
-  const POI_DROP_CHANCE = 0.2; // 20% chance per wander step
+  let nextPoiIndex = Math.floor(Math.random() * POI_NAMES.length);
 
   // Semi-random wander: move to a nearby point
   function wander() {
@@ -104,21 +108,31 @@
     let nx = myX + Math.cos(angle) * dist;
     let ny = myY + Math.sin(angle) * dist;
     
-    // Clamp to map bounds with some padding
     nx = Math.max(5, Math.min(MAP_W - 5, nx));
     ny = Math.max(5, Math.min(MAP_H - 5, ny));
     
     myX = Math.round(nx * 10) / 10;
     myY = Math.round(ny * 10) / 10;
     
-    // Randomly drop or clear a POI marker
-    if (Math.random() < POI_DROP_CHANCE) {
-      const name = POI_NAMES[Math.floor(Math.random() * POI_NAMES.length)];
-      broadcastMarker(name);
-    } else {
-      // Broadcast position only
-      broadcastPosition();
-    }
+    broadcastPosition();
+  }
+
+  // Drop a marker at current position (instant local + broadcast)
+  function dropMarker() {
+    const name = POI_NAMES[nextPoiIndex % POI_NAMES.length];
+    nextPoiIndex++;
+    ownMarkerMap.set(name, {
+      x: myX, y: myY, text: name, node: myLabel, time: 'NOW'
+    });
+    ownMarkerMap = ownMarkerMap; // trigger Svelte reactivity
+    broadcastMarker(name);
+  }
+
+  // Remove own marker (instant local + broadcast toggle-off)
+  function removeMarker(name) {
+    ownMarkerMap.delete(name);
+    ownMarkerMap = ownMarkerMap; // trigger Svelte reactivity
+    broadcastMarker(name);
   }
 
   function broadcastPosition() {
@@ -172,7 +186,6 @@
   // Build node list for rendering
   $: allNodes = (() => {
     const result = [];
-    const myLabel = `N-${localId.toString().padStart(2, '0')}`;
     
     // Add self
     result.push({
@@ -185,7 +198,7 @@
     
     // Add other nodes from parsed positions
     for (const [label, pos] of Object.entries(nodePositions)) {
-      if (label === myLabel) continue; // skip self
+      if (label === myLabel) continue;
       result.push({
         label,
         x: pos.x,
@@ -198,9 +211,10 @@
     return result;
   })();
 
-  // Grid line generation
-  $: gridLinesX = Array.from({length: 11}, (_, i) => i * 10);
-  $: gridLinesY = Array.from({length: 11}, (_, i) => i * 10);
+  // Own markers from local state (instant)
+  $: ownMarkers = [...ownMarkerMap.values()];
+
+
 </script>
 
 <div bind:this={svgContainer} style="position:relative;flex:1;min-height:0;overflow:hidden;background:var(--ink-050)">
@@ -222,7 +236,7 @@
     </div>
   </div>
 
-  <!-- Position readout top-right -->
+  <!-- Position readout + controls top-right -->
   <div style="position:absolute;top:16px;right:24px;z-index:2;text-align:right">
     <div class="stamp" style="font-size:9px;margin-bottom:4px">MY POSITION</div>
     <div class="ticker" style="font-size:18px;color:var(--signal-300);font-weight:500">
@@ -231,49 +245,44 @@
     <div class="stamp" style="font-size:9px;margin-top:4px;color:var(--bone-400)">
       WANDERING · {(WANDER_INTERVAL / 1000).toFixed(0)}s INTERVAL
     </div>
+    <button class="map-drop-btn" on:click={dropMarker} disabled={!connected}
+      title="Place a named marker at your current position">
+      <span style="font-size:12px">◆</span> DROP MARKER
+    </button>
   </div>
 
-  <!-- Legend bottom-right -->
-  <div style="position:absolute;bottom:16px;right:24px;display:flex;gap:8px;z-index:2">
-    <div class="chip chip-ok"><div class="chip-dot"></div>SELF</div>
-    <div class="chip chip-info"><div class="chip-dot"></div>PEER</div>
-    <div class="chip chip-warm"><div class="chip-dot"></div>MARKER</div>
+  <!-- Own markers panel bottom-right -->
+  <div class="map-own-markers" style="position:absolute;bottom:16px;right:24px;z-index:2">
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:{ownMarkers.length ? 6 : 0}px">
+      <div class="chip chip-ok"><div class="chip-dot"></div>SELF</div>
+      <div class="chip chip-info"><div class="chip-dot"></div>PEER</div>
+      <div class="chip chip-warm"><div class="chip-dot"></div>MARKER</div>
+    </div>
+    {#if ownMarkers.length}
+      <div class="own-marker-list">
+        {#each ownMarkers as m (m.text)}
+          <button class="own-marker-item" on:click={() => removeMarker(m.text)}
+            title="Click to remove marker {m.text}">
+            <span class="own-marker-diamond">◆</span>
+            <span class="own-marker-name">{m.text}</span>
+            <span class="own-marker-coord">[{m.x.toFixed(1)},{m.y.toFixed(1)}]</span>
+            <span class="own-marker-x">✕</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
   </div>
 
   <!-- Marker count bottom-left -->
   <div style="position:absolute;bottom:16px;left:24px;z-index:2">
     <div class="stamp" style="font-size:9px">
-      {markers.length} MARKER{markers.length !== 1 ? 'S' : ''} · {Object.keys(nodePositions).length} TRACKED
+      {markers.length} MARKER{markers.length !== 1 ? 'S' : ''} · {ownMarkers.length} OWN · {Object.keys(nodePositions).length} TRACKED
     </div>
   </div>
 
   <!-- SVG map -->
   <svg width={svgWidth} height={svgHeight} style="position:absolute;inset:0">
-    <!-- Coordinate grid lines -->
-    {#each gridLinesX as gx}
-      {@const p = toSvg(gx, 0)}
-      {@const p2 = toSvg(gx, MAP_H)}
-      <line x1={p.x} y1={p.y} x2={p2.x} y2={p2.y}
-        stroke="var(--ink-400)" stroke-opacity="0.3" stroke-width="0.5"
-        stroke-dasharray="2 6"></line>
-      <text x={p.x} y={p.y - 6} font-family="JetBrains Mono, monospace"
-        font-size="8" fill="var(--bone-500)" text-anchor="middle">{gx}</text>
-    {/each}
-    {#each gridLinesY as gy}
-      {@const p = toSvg(0, gy)}
-      {@const p2 = toSvg(MAP_W, gy)}
-      <line x1={p.x} y1={p.y} x2={p2.x} y2={p2.y}
-        stroke="var(--ink-400)" stroke-opacity="0.3" stroke-width="0.5"
-        stroke-dasharray="2 6"></line>
-      <text x={p.x - 8} y={p.y + 3} font-family="JetBrains Mono, monospace"
-        font-size="8" fill="var(--bone-500)" text-anchor="end">{gy}</text>
-    {/each}
 
-    <!-- Map border -->
-    <rect x={toSvg(0,0).x} y={toSvg(0,0).y}
-      width={toSvg(MAP_W,MAP_H).x - toSvg(0,0).x}
-      height={toSvg(MAP_W,MAP_H).y - toSvg(0,0).y}
-      fill="none" stroke="var(--ink-500)" stroke-width="1"></rect>
 
     <!-- Markers -->
     {#each markers as marker}
@@ -358,5 +367,84 @@
   }
   .map-marker:hover {
     opacity: 0.8;
+  }
+
+  /* Drop marker button */
+  .map-drop-btn {
+    margin-top: 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border: 1px solid var(--uplink-300);
+    border-radius: 4px;
+    background: rgba(255, 179, 71, 0.1);
+    color: var(--uplink-300);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    cursor: pointer;
+    transition: background 0.2s, box-shadow 0.2s;
+  }
+  .map-drop-btn:hover:not(:disabled) {
+    background: rgba(255, 179, 71, 0.22);
+    box-shadow: 0 0 12px rgba(255, 179, 71, 0.15);
+  }
+  .map-drop-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  /* Own markers list */
+  .own-marker-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    max-height: 140px;
+    overflow-y: auto;
+  }
+  .own-marker-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border: 1px solid rgba(255, 179, 71, 0.25);
+    border-radius: 3px;
+    background: rgba(7, 11, 18, 0.75);
+    color: var(--bone-200);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    text-align: left;
+  }
+  .own-marker-item:hover {
+    background: rgba(255, 70, 70, 0.12);
+    border-color: rgba(255, 70, 70, 0.5);
+  }
+  .own-marker-item:hover .own-marker-x {
+    opacity: 1;
+    color: #ff5050;
+  }
+  .own-marker-diamond {
+    color: var(--uplink-300);
+    font-size: 8px;
+  }
+  .own-marker-name {
+    color: var(--uplink-300);
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    min-width: 60px;
+  }
+  .own-marker-coord {
+    color: var(--bone-500);
+    font-size: 8px;
+  }
+  .own-marker-x {
+    margin-left: auto;
+    opacity: 0.3;
+    font-size: 10px;
+    transition: opacity 0.15s, color 0.15s;
   }
 </style>
