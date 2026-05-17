@@ -47,15 +47,23 @@ pub struct RaptorQDelivery<T: Transport + ?Sized> {
     /// Value is (decoder, time of last packet received for this object, packets_received, k_symbols).
     decoders: Arc<Mutex<HashMap<ObjectId, (Decoder, Instant, u32, u32)>>>,
     completed_objects: Arc<Mutex<CompletedSet>>,
-    peer_coverage: Arc<Mutex<HashMap<NodeId, ObjectBitmap>>>,
+    /// Exact object IDs confirmed decoded by each peer (from beacon recent lists).
+    /// Used by send_object for accurate coverage counting — no bitmap hash collisions.
+    peer_exact: Arc<Mutex<HashMap<NodeId, HashSet<ObjectId>>>>,
     peer_prr: Arc<Mutex<HashMap<NodeId, f32>>>,
     local_bitmap: Arc<Mutex<ObjectBitmap>>,
+    /// Last RECENT_COMPLETED_CAP decoded object IDs, in insertion order.
+    /// Broadcast in beacons so peers can perform exact-ID coverage checks.
+    recent_completed: Arc<Mutex<VecDeque<ObjectId>>>,
 }
 
 /// Incomplete decoders older than this are dropped (no more packets expected after TTL expires).
-const DECODER_STALE_SECS: u64 = 10;
+/// Matches the default send policy TTL — a sender won't retransmit after that point.
+const DECODER_STALE_SECS: u64 = 30;
 /// How many recently-completed object IDs to remember to suppress re-delivery.
 const COMPLETED_CAP: usize = 4096;
+/// How many recently-decoded object IDs to keep for exact-ID coverage broadcasting.
+const RECENT_COMPLETED_CAP: usize = 64;
 
 impl<T: Transport + 'static + ?Sized> RaptorQDelivery<T> {
     pub fn new(transport: Arc<T>) -> Arc<Self> {
@@ -65,9 +73,10 @@ impl<T: Transport + 'static + ?Sized> RaptorQDelivery<T> {
             telemetry_subscribers: Arc::new(Mutex::new(Vec::new())),
             decoders: Arc::new(Mutex::new(HashMap::new())),
             completed_objects: Arc::new(Mutex::new(CompletedSet::new(COMPLETED_CAP))),
-            peer_coverage: Arc::new(Mutex::new(HashMap::new())),
+            peer_exact: Arc::new(Mutex::new(HashMap::new())),
             peer_prr: Arc::new(Mutex::new(HashMap::new())),
             local_bitmap: Arc::new(Mutex::new(ObjectBitmap::default())),
+            recent_completed: Arc::new(Mutex::new(VecDeque::with_capacity(RECENT_COMPLETED_CAP + 1))),
         });
 
         let mut rx = transport.subscribe(Kind::Fec);
@@ -155,6 +164,15 @@ impl<T: Transport + 'static + ?Sized> RaptorQDelivery<T> {
 
                 self.completed_objects.lock().unwrap().insert(frame.object_id);
                 self.local_bitmap.lock().unwrap().set(frame.object_id);
+                {
+                    let mut recent = self.recent_completed.lock().unwrap();
+                    if recent.back().copied() != Some(frame.object_id) {
+                        recent.push_back(frame.object_id);
+                        if recent.len() > RECENT_COMPLETED_CAP {
+                            recent.pop_front();
+                        }
+                    }
+                }
 
                 let mut subscribers = self.subscribers.lock().unwrap();
                 subscribers.retain(|tx| {
@@ -189,7 +207,7 @@ impl<T: Transport + 'static + ?Sized> Delivery for RaptorQDelivery<T> {
     fn send_object(&self, id: ObjectId, payload: Vec<u8>, policy: SendPolicy) -> Result<()> {
         let transport = self.transport.clone();
         let payload_len = payload.len() as u64;
-        let peer_coverage = self.peer_coverage.clone();
+        let peer_exact = self.peer_exact.clone();
         let peer_prr = self.peer_prr.clone();
 
         tokio::spawn(async move {
@@ -212,38 +230,48 @@ impl<T: Transport + 'static + ?Sized> Delivery for RaptorQDelivery<T> {
             let mut oti = [0u8; 12];
             oti[0..8].copy_from_slice(&payload_len.to_be_bytes());
 
-            for packet in packets {
-                let coverage_count = {
-                    let coverage = peer_coverage.lock().unwrap();
-                    coverage.values().filter(|b| b.contains(id)).count()
-                };
+            // Honour the send policy TTL: abort if we cannot achieve coverage in time.
+            let _ = tokio::time::timeout(policy.ttl, async {
+                let mut sent = 0u32;
+                for packet in packets {
+                    // Only check coverage after sending at least k source symbols —
+                    // the receiver cannot attempt decoding with fewer than k packets.
+                    if sent >= k {
+                        let coverage_count = {
+                            let exact = peer_exact.lock().unwrap();
+                            exact.values().filter(|set| set.contains(&id)).count()
+                        };
 
-                if coverage_count >= policy.desired_coverage as usize {
-                    break;
-                }
-
-                let block = packet.payload_id().source_block_number();
-                let esi = packet.payload_id().encoding_symbol_id();
-                let frame = FecFrame {
-                    object_id: id,
-                    block,
-                    oti,
-                    esi,
-                    sym_sz: symbol_size,
-                    payload: packet.data().to_vec(),
-                };
-
-                let encoded_frame = frame.encode();
-                loop {
-                    match transport.broadcast(Kind::Fec, &encoded_frame) {
-                        Ok(()) => break,
-                        Err(litm_common::Error::Backpressure) => {
-                            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                        if coverage_count >= policy.desired_coverage as usize {
+                            break;
                         }
-                        Err(_) => break,
                     }
+
+                    let block = packet.payload_id().source_block_number();
+                    let esi = packet.payload_id().encoding_symbol_id();
+                    let frame = FecFrame {
+                        object_id: id,
+                        block,
+                        oti,
+                        esi,
+                        sym_sz: symbol_size,
+                        payload: packet.data().to_vec(),
+                    };
+
+                    let encoded_frame = frame.encode();
+                    loop {
+                        match transport.broadcast(Kind::Fec, &encoded_frame) {
+                            Ok(()) => break,
+                            Err(litm_common::Error::Backpressure) => {
+                                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    sent += 1;
                 }
-            }
+            })
+            .await;
         });
 
         Ok(())
@@ -265,8 +293,16 @@ impl<T: Transport + 'static + ?Sized> Delivery for RaptorQDelivery<T> {
         *self.local_bitmap.lock().unwrap()
     }
 
-    fn note_peer_coverage(&self, peer: NodeId, bitmap: ObjectBitmap, prr: f32) {
-        self.peer_coverage.lock().unwrap().insert(peer, bitmap);
+    fn decoded_recent(&self) -> Vec<ObjectId> {
+        self.recent_completed.lock().unwrap().iter().copied().collect()
+    }
+
+    fn note_peer_coverage(&self, peer: NodeId, bitmap: ObjectBitmap, recent: Vec<ObjectId>, prr: f32) {
+        let _ = bitmap; // retained in signature for telemetry callers; delivery uses exact IDs
+        self.peer_exact
+            .lock()
+            .unwrap()
+            .insert(peer, recent.into_iter().collect::<HashSet<ObjectId>>());
         self.peer_prr.lock().unwrap().insert(peer, prr);
     }
 }

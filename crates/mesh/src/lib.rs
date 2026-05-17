@@ -1,5 +1,6 @@
 use litm_common::{
-    ControlPayload, Delivery, Epoch, Kind, Mesh, NeighborInfo, NodeId, ObjectBitmap, Transport,
+    ControlPayload, Delivery, Epoch, Kind, Mesh, NeighborInfo, NodeId, ObjectBitmap, ObjectId,
+    Transport,
 };
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -14,6 +15,10 @@ pub struct BeaconPayload {
     pub beacon_seq: u32,
     pub neighbors_heard: Vec<(NodeId, u8)>, // (NodeId, PRR * 255)
     pub decoded: ObjectBitmap,
+    /// Up to 8 most-recently decoded object IDs, exact values (no hashing).
+    /// Allows the sender to do exact-ID coverage checking instead of relying on
+    /// the lossy 256-slot bitmap, eliminating false-positive coverage confirmations.
+    pub recent_completed: Vec<ObjectId>,
 }
 
 #[derive(Clone, Debug)]
@@ -113,12 +118,18 @@ impl MeshService {
                     };
 
                     let decoded = delivery.decoded_bitmap();
+                    let recent_completed = {
+                        let all = delivery.decoded_recent();
+                        let start = all.len().saturating_sub(8);
+                        all[start..].to_vec()
+                    };
 
                     let payload = BeaconPayload {
                         epoch,
                         beacon_seq,
                         neighbors_heard,
                         decoded,
+                        recent_completed,
                     };
 
                     if let Ok(encoded) = postcard::to_allocvec(&payload) {
@@ -223,7 +234,12 @@ impl MeshService {
                         let table = neighbor_table.read().unwrap();
                         table.get(&meta.sender_id).map(|s| s.prr).unwrap_or(0.5)
                     };
-                    delivery.note_peer_coverage(meta.sender_id, beacon.decoded, prr);
+                    delivery.note_peer_coverage(
+                        meta.sender_id,
+                        beacon.decoded,
+                        beacon.recent_completed.clone(),
+                        prr,
+                    );
                 }
             }
         });

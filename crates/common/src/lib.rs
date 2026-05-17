@@ -162,7 +162,12 @@ pub trait Delivery: Send + Sync + 'static {
     fn send_object(&self, id: ObjectId, payload: Vec<u8>, policy: SendPolicy) -> Result<()>;
     fn subscribe(&self) -> mpsc::Receiver<DeliveredObject>;
     fn decoded_bitmap(&self) -> ObjectBitmap;
-    fn note_peer_coverage(&self, peer: NodeId, bitmap: ObjectBitmap, prr: f32);
+    /// Return the last N object IDs successfully decoded by this node (exact IDs, no hashing).
+    /// Used by the mesh layer to piggyback into beacons so peers can do exact-ID coverage checks.
+    fn decoded_recent(&self) -> Vec<ObjectId>;
+    /// Update sender-side coverage state for a peer.
+    /// `bitmap` is kept for display/telemetry; `recent` is used for send-side coverage decisions.
+    fn note_peer_coverage(&self, peer: NodeId, bitmap: ObjectBitmap, recent: Vec<ObjectId>, prr: f32);
     fn subscribe_telemetry(&self) -> mpsc::Receiver<RaptorEvent> {
         mpsc::channel(1).1 // Default empty receiver
     }
